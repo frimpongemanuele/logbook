@@ -39,8 +39,9 @@ try {
   ok("Rest timer started (3:00 for bench)", /2:5\d|3:00/.test(await page.textContent("[data-restbar] .t")));
   await shot("04-rest");
   // crash: reload mid-workout
-  await page.reload(); await page.waitForSelector(".banner");
-  ok("After reload: resume banner on Today", (await page.textContent(".banner")).includes("Unfinished workout"));
+  await page.reload(); await page.waitForSelector(".bar-card.hot");
+  ok("After reload: compact resume bar on Today", (await page.textContent(".bar-card.hot")).includes("Workout in progress"));
+  ok("Resume bar is compact (< 80px)", (await page.$eval(".bar-card.hot", e => e.getBoundingClientRect().height)) < 80);
   await tapText("Resume"); await page.waitForSelector(".ex-name");
   ok("Logged set survived reload", (await cells())[0][1] === "10" && await page.$eval(".set", e => e.classList.contains("done")));
   // sets 2 and 3: 10 and 8 reps
@@ -51,8 +52,29 @@ try {
   }
   // RIR sheet
   await page.locator('.set').nth(3-1).locator('[data-a="wRir"]').click(); await page.waitForSelector(".rirs"); await shot("05-rir"); await page.click('[data-a="rirPick"][data-v="1"]');
+  ok("Next button names the next exercise", (await page.textContent(".nextbtn")).includes("Incline Smith Press"));
+  // drag to reorder inside the workout list sheet: move exercise 1 (Bench) to position 3
+  const dragHandle = async (fromIdx, toIdx) => {
+    const hs = await page.$$(".sortable .handle"); const a = await hs[fromIdx].boundingBox(); const b = await hs[toIdx].boundingBox();
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await page.mouse.down();
+    const ty = b.y + b.height / 2 + (toIdx > fromIdx ? 8 : -8);
+    for (let k = 1; k <= 12; k++) { await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2 + (ty - a.y - a.height / 2) * k / 12); await page.waitForTimeout(16); }
+    await page.mouse.up(); await page.waitForTimeout(300);
+  };
+  await page.click('[data-a="wkList"]'); await page.waitForSelector(".orow");
+  await shot("04b-order-sheet");
+  await dragHandle(0, 2);
+  const order = await page.$$eval(".orow b", els => els.map(e => e.textContent.trim()));
+  ok("Workout drag: Bench moved to 3rd", order[2] === "Bench Press" && order[0] === "Incline Smith Press");
+  await page.click('[data-a="gotoClose"][data-v="2"]'); await page.waitForTimeout(200);
+  ok("Current exercise stays Bench after reorder", (await page.textContent(".ex-name")).includes("Bench Press"));
+  await page.click('[data-a="wkList"]'); await dragHandle(2, 0); await page.click('[data-a="gotoClose"][data-v="0"]'); await page.waitForTimeout(200);
+  ok("Dragged back: Bench first again", (await page.$$eval("#strip button", b => b[0].textContent)).includes("Bench Press"));
   // undo delete on exercise 2
   await page.click('[data-a="goto"][data-v="1"]'); await page.waitForSelector(".ex-name:has-text('Incline Smith')");
+  // changing set 1 load carries over to set 2 (same planned load, not yet edited)
+  await page.locator('.set').nth(0).locator('[data-f="load"]').click(); await page.click('[data-a="kStep"][data-v="2.5"]'); await page.click('[data-a="kOk"]'); await page.waitForTimeout(200);
+  ok("Load edit carries to later unticked set (42.5/42.5)", JSON.stringify((await cells()).map(c => c[0])) === JSON.stringify(["42.5", "42.5"]));
   await page.locator('.set').nth(2-1).locator('[data-a="setMenu"]').click(); await page.click('.menu .danger');
   await page.waitForTimeout(250); ok("Delete set → 1 set left", (await cells()).length === 1);
   await page.click('[data-a="undo"]'); await page.waitForTimeout(250); ok("Undo restores set", (await cells()).length === 2);
@@ -72,9 +94,25 @@ try {
   await tapText("Done");
   await page.waitForSelector("h1");
   ok("Rotation advanced to Pull", (await page.textContent("h1")) === "Pull");
+  ok("Backup bar collapsed by default (< 80px)", (await page.$eval(".bar-card", e => e.getBoundingClientRect().height)) < 80);
+  await page.click('[data-a="toggleBackup"]'); await page.waitForTimeout(150);
+  ok("Backup bar expands on tap", !!(await page.$(".expl")));
+  await shot("07b-today-backup-open");
+  await page.click('[data-a="toggleBackup"]'); await page.waitForTimeout(150);
+  ok("Backup bar collapses again", !(await page.$(".expl")));
   // program updated
   await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]'); await page.click('[data-a="openDay"][data-v="0"]');
   ok("Program Push now starts 82.5×8", (await page.textContent(".scroll")).includes("82.5×8"));
+  // drag in the program day editor, and it persists
+  const names = async () => page.$$eval('.sortable [data-a="openPe"] b', els => els.map(e => e.textContent.trim()));
+  const before = await names();
+  await dragHandle(4, 0);
+  const after = await names();
+  ok("Program drag: last exercise moved to top", after[0] === before[4] && after[1] === before[0]);
+  await page.reload(); await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]'); await page.click('[data-a="openDay"][data-v="0"]');
+  ok("Program order persisted after reload", JSON.stringify(await names()) === JSON.stringify(after));
+  await dragHandle(0, 4);
+  ok("Program drag back restores order", JSON.stringify(await names()) === JSON.stringify(before));
   await shot("08-day");
   await page.click('[data-a="openPe"][data-v="0"]'); await page.click('[data-a="tplAdd"]');
   await page.waitForTimeout(250); ok("Template editor: added a 4th set", (await page.$$(".tpl")).length === 4);

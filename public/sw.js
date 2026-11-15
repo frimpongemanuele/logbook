@@ -1,5 +1,5 @@
 // Offline app shell. Bump CACHE on every release; the app is cache-first, refreshed in the background.
-const CACHE = "logbook-0.3.0";
+const CACHE = "logbook-0.4.0";
 const SHELL = ["./", "./index.html", "./styles.css", "./manifest.webmanifest",
   "./js/app.js", "./js/db.js", "./js/domain.js", "./js/i18n.js", "./js/seed.js", "./js/data.js",
   "./icons/icon-192.png", "./icons/apple-touch-icon.png"];

@@ -4,7 +4,7 @@ import { t, setLang, getLang } from "./i18n.js";
 import { seedExercises, MUSCLES } from "./seed.js";
 import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2 } from "./domain.js";
 import { setsCsv, mergeImport } from "./data.js";
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 const DAY = 86400000;
 const A = {
     lib: new Map(), programs: [], sessions: [],
@@ -178,6 +178,8 @@ const I = {
     up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" width="20" height="20"><path d="M6 15l6-6 6 6"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" width="20" height="20"><path d="M6 9l6 6 6-6"/></svg>',
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" width="20" height="20"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    grip: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" width="22" height="22"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
+    list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" width="20" height="20"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true" width="20" height="20"><path d="M12 5v14M5 12h14"/></svg>',
 };
 const header = (title, right = "") => `<header class="hdr"><button class="iconbtn" data-a="back" aria-label="${t("back")}">${I.back}</button><div class="hdr-t">${esc(title)}</div><div class="hdr-r">${right}</div></header>`;
@@ -223,13 +225,15 @@ function vToday() {
     const p = activeProgram();
     let h = `<div class="scroll">`;
     if (s) {
-        h += `<div class="banner"><b>${t("resumeTitle")}</b><div class="sub mt4">${t("resumeBody", { t: tstr(s.startedAt) })}</div>
-      <div class="row wrap mt12"><button class="btn primary" data-a="openWorkout">${t("resume")}</button><button class="btn ghost" data-a="askFinish">${t("finishNow")}</button><button class="btn ghost" data-a="askDiscard">${t("discard")}</button></div></div>`;
+        h += `<div class="bar-card hot"><div class="flex1"><b>${t("inProgress")}</b><span class="sub small block">${esc(nm(s.dayName))} · ${t("startedAt", { t: tstr(s.startedAt) })} · <span data-clock>${clock(elapsed(s))}</span></span></div>
+      <button class="btn primary small" data-a="openWorkout">${t("resume")}</button><button class="iconbtn" data-a="resumeMenu" aria-label="${t("more")}">${I.dots}</button></div>`;
     }
     const real = completed().filter((x) => !x.imported);
     const lb = A.settings.lastBackupAt;
     if (real.length && (!lb || (now() - lb > 7 * DAY && real.some((x) => (x.endedAt || 0) > lb)))) {
-        h += `<div class="banner soft"><b>${t("backupTitle")}</b><div class="sub mt4">${t("backupBody", { d: lb ? dstr(lb) : t("never") })}</div><button class="btn primary small mt12" data-a="exportJson">${t("backupNow")}</button></div>`;
+        const open = !!A.settings.backupOpen;
+        h += `<div class="bar-card"><button class="flex1 row tl g8" data-a="toggleBackup" aria-expanded="${open}"><span class="dot" aria-hidden="true"></span><span class="flex1"><b class="small">${t("backupShort")}</b><span class="sub small block">${t("lastBackup", { d: lb ? dstr(lb) : t("never") })}</span></span><span class="faint">${open ? I.up : I.down}</span></button>
+      <button class="btn ghost small" data-a="exportJson">${t("backupNow")}</button></div>${open ? `<p class="sub small expl">${t("backupBody", { d: lb ? dstr(lb) : t("never") })}</p>` : ""}`;
     }
     const pend = completed().slice(0, 3).find((x) => (x.suggestions || []).some((g) => g.status === "pending"));
     if (pend) {
@@ -270,16 +274,32 @@ function badge(e, i) {
     const tag = s.type === "top" ? "T" : s.type === "backoff" ? "B" : s.type === "amrap" ? "A" : s.type === "drop" ? "D" : String(n);
     return `<span class="badge ${s.type === "top" ? "acc" : ""}">${tag}</span>`;
 }
+/** What comes after the current rest: next unticked set here, else the next exercise's. */
+function nextUp(s) {
+    for (let k = s.idx; k < s.exercises.length; k++) {
+        const e = s.exercises[k];
+        if (e.skipped)
+            continue;
+        const i = e.sets.findIndex((x) => !x.done);
+        if (i < 0)
+            continue;
+        const x = e.sets[i], ex = exById(e.exId);
+        const no = x.type === "warmup" ? "W" : e.sets.slice(0, i + 1).filter(isWork).length;
+        return `${k === s.idx ? "" : esc(nm(e.name)) + " · "}${t("set")} ${no} · ${loadTxt(ex, x.load)} kg × ${x.reps}`;
+    }
+    return null;
+}
 function vWorkout(s) {
     if (s.idx >= s.exercises.length)
         s.idx = Math.max(0, s.exercises.length - 1);
     const e = s.exercises[s.idx];
     const strip = s.exercises.map((x, i) => {
         const fin = x.sets.length && x.sets.every((y) => y.done);
-        return `<button class="${i === s.idx ? "on" : ""} ${fin ? "fin" : ""} ${x.skipped ? "skip" : ""}" data-a="goto" data-v="${i}">${x.group ? esc(x.group) + " · " : ""}${esc(nm(x.name))}</button>`;
+        const dn = x.sets.filter((y) => y.done).length;
+        return `<button class="${i === s.idx ? "on" : ""} ${fin ? "fin" : ""} ${x.skipped ? "skip" : ""}" data-a="goto" data-v="${i}">${x.group ? esc(x.group) + " · " : ""}${esc(nm(x.name))} <span class="prog num">${dn}/${x.sets.length}</span></button>`;
     }).join("") + `<button data-a="addToWorkout" aria-label="${t("addExercise")}">+</button>`;
     const head = `<div class="wk-head"><div class="wk-top">
-    <button class="btn ghost small" data-a="tab" data-v="today" aria-label="${t("minimise")}">${I.down}</button>
+    <div class="row g6"><button class="btn ghost small" data-a="tab" data-v="today" aria-label="${t("minimise")}">${I.down}</button><button class="btn ghost small" data-a="wkList" aria-label="${t("reorder")}">${I.list}</button></div>
     <div class="c"><div class="wk-title">${esc(nm(s.dayName))}</div><div class="wk-clock num" data-clock>${s.pausedAt ? t("paused") + " · " : ""}${clock(elapsed(s))}</div></div>
     <div class="row g6"><button class="btn ghost small" data-a="pause">${s.pausedAt ? t("resumeBtn") : t("pause")}</button><button class="btn primary small" data-a="askFinish">${t("finish")}</button></div>
   </div><div class="strip" id="strip">${strip}</div></div>`;
@@ -316,11 +336,16 @@ function vWorkout(s) {
         const l = s.rest.endsAt - now(), p = Math.max(0, Math.min(1, l / (s.rest.total * 1000)));
         restH = `<div class="rest ${l <= 0 ? "over" : ""}" data-restbar><span class="t num" aria-live="polite">${l > 0 ? clock(l) : t("restDone")}</span><span class="bar"><i style="width:${p * 100}%"></i></span>
       <button class="btn ghost small num" data-a="rest30">+30${t("sec")}</button><button class="btn ghost small" data-a="restSkip">${t("skip")}</button></div>`;
+        const nu = nextUp(s);
+        if (nu)
+            restH += `<div class="next-up small num">${t("nextUp")}: ${nu}</div>`;
     }
     const lastIdx = s.idx === s.exercises.length - 1;
+    const curDone = e.skipped || (e.sets.length > 0 && e.sets.every((y) => y.done));
+    const nxt = s.exercises[s.idx + 1];
     const foot = `<div class="wk-foot">${restH}<div class="row g8">
-    <button class="btn ghost flex1" data-a="goto" data-v="${s.idx - 1}" ${s.idx === 0 ? "disabled" : ""}>‹ ${t("prev")}</button>
-    <button class="btn ${lastIdx ? "primary" : "ghost"} flex1" data-a="${lastIdx ? "askFinish" : "goto"}" data-v="${s.idx + 1}">${lastIdx ? t("finish") : t("nextEx") + " ›"}</button></div></div>`;
+    <button class="btn ghost prevbtn" data-a="goto" data-v="${s.idx - 1}" ${s.idx === 0 ? "disabled" : ""} aria-label="${t("prev")}">‹</button>
+    <button class="btn ${lastIdx || curDone ? "primary" : "ghost"} flex1 nextbtn" data-a="${lastIdx ? "askFinish" : "goto"}" data-v="${s.idx + 1}">${lastIdx ? t("finish") : `<span class="ell">${t("nextEx")}: ${esc(nm(nxt.name))}</span> ›`}</button></div></div>`;
     return `<div class="wk">${head}${body}${foot}</div>`;
 }
 async function toggleSet(s, i) {
@@ -515,9 +540,9 @@ function vProgram(p) {
     <label class="lbl" for="pname">${t("name")}</label><input id="pname" class="inp" value="${esc(pr.name)}" data-in="progName" data-id="${pr.id}">
     <label class="lbl" for="pdesc">${t("description")}</label><input id="pdesc" class="inp" value="${esc(pr.description || "")}" data-in="progDesc" data-id="${pr.id}">
     <h2>${t("days")}</h2>
-    ${pr.days.map((d, i) => `<div class="card row">
+    <div class="sortable" data-sort="days" data-id="${pr.id}">${pr.days.map((d, i) => `<div class="card row sort-item">
       <button class="flex1 tl" data-a="openDay" data-id="${pr.id}" data-v="${i}"><b>${i + 1}. ${esc(nm(d.name))}</b>${pr.nextDay === i ? ` <span class="pill accent">${t("isNext")}</span>` : ""}<span class="sub block">${d.exercises.map((e) => esc(exName(e.exId))).join(" · ") || "—"}</span></button>
-      <div class="col"><button class="iconbtn" data-a="dayUp" data-id="${pr.id}" data-v="${i}" aria-label="${t("moveUp")}" ${i === 0 ? "disabled" : ""}>${I.up}</button><button class="iconbtn" data-a="dayDown" data-id="${pr.id}" data-v="${i}" aria-label="${t("moveDown")}" ${i === pr.days.length - 1 ? "disabled" : ""}>${I.down}</button></div></div>`).join("")}
+      <button class="handle" data-handle aria-label="${t("dragHint")}">${I.grip}</button></div>`).join("")}</div>
     <button class="btn ghost block mt8" data-a="addDay" data-id="${pr.id}">+ ${t("addDay")}</button></div>`;
 }
 function vDay(p) {
@@ -526,14 +551,14 @@ function vDay(p) {
     if (!d)
         return header("");
     return header(nm(d.name), `<button class="iconbtn" data-a="dayMenu" data-id="${pr.id}" data-v="${p.d}" aria-label="${t("edit")}">${I.dots}</button>`) + `<div class="scroll">
-    ${d.exercises.map((pe, i) => {
+    <div class="sortable" data-sort="day" data-id="${pr.id}" data-d="${p.d}">${d.exercises.map((pe, i) => {
         const ex = exById(pe.exId);
         const sum = pe.sets.map((s) => s.type === "warmup" ? `W ${loadTxt(ex, s.load ?? 0)}×${s.repsMin}` : `${s.load != null ? loadTxt(ex, s.load) + "×" : ""}${s.repsMin}${s.repsMax !== s.repsMin ? "–" + s.repsMax : ""}${s.rir != null ? "@" + s.rir : ""}`).join(" · ");
-        return `<div class="card row"><button class="flex1 tl" data-a="openPe" data-id="${pr.id}" data-d="${p.d}" data-v="${i}">
+        return `<div class="card row sort-item"><button class="flex1 tl" data-a="openPe" data-id="${pr.id}" data-d="${p.d}" data-v="${i}">
         <b>${esc(exName(pe.exId))}</b>${pe.group ? ` <span class="pill accent">${esc(pe.group)}</span>` : ""}${pe.optional ? ` <span class="pill">${t("optional")}</span>` : ""}
         <span class="sub block num">${sum}</span></button>
-        <div class="col"><button class="iconbtn" data-a="peUp" data-id="${pr.id}" data-d="${p.d}" data-v="${i}" ${i === 0 ? "disabled" : ""} aria-label="${t("moveUp")}">${I.up}</button><button class="iconbtn" data-a="peDown" data-id="${pr.id}" data-d="${p.d}" data-v="${i}" ${i === d.exercises.length - 1 ? "disabled" : ""} aria-label="${t("moveDown")}">${I.down}</button></div></div>`;
-    }).join("")}
+        <button class="handle" data-handle aria-label="${t("dragHint")}">${I.grip}</button></div>`;
+    }).join("")}</div>${d.exercises.length > 1 ? `<p class="faint small c">${t("dragTip")}</p>` : ""}
     <button class="btn ghost block mt8" data-a="pickFor" data-mode="addToDay" data-id="${pr.id}" data-d="${p.d}">+ ${t("addExercise")}</button></div>`;
 }
 function vPe(p) {
@@ -686,6 +711,13 @@ function vSheet() {
     else if (sh.kind === "confirm") {
         inner = `<h3>${esc(sh.title)}</h3><p class="sub">${esc(sh.body)}</p><div class="row g8"><button class="btn ghost flex1" data-a="closeSheet">${t("cancel")}</button>
       <button class="btn ${sh.danger ? "ghost danger" : "primary"} flex1" data-a="confirmOk">${esc(sh.okLabel)}</button></div>`;
+    }
+    else if (sh.kind === "order") {
+        const s = activeSession();
+        inner = `<h3>${t("reorder")}</h3><p class="sub small">${t("dragTip")}</p><div class="sortable mt8" data-sort="wk">${s.exercises.map((x, i) => {
+            const dn = x.sets.filter((y) => y.done).length;
+            return `<div class="sort-item orow ${i === s.idx ? "cur" : ""}"><button class="flex1 tl" data-a="gotoClose" data-v="${i}"><b class="${x.skipped ? "strike" : ""}">${x.group ? esc(x.group) + " · " : ""}${esc(nm(x.name))}</b><span class="sub small block num">${dn}/${x.sets.length} ${t("sets").toLowerCase()}${x.skipped ? " · " + t("skip") : ""}</span></button><button class="handle" data-handle aria-label="${t("dragHint")}">${I.grip}</button></div>`;
+        }).join("")}</div><button class="btn ghost block mt8" data-a="addToWorkout">+ ${t("addExercise")}</button>`;
     }
     else if (sh.kind === "text") {
         inner = `<h3>${esc(sh.title)}</h3><input class="inp" id="sheetText" value="${esc(sh.val)}" data-in="sheetText"><button class="btn primary block mt12" data-a="textOk">${t("save")}</button>`;
@@ -872,6 +904,23 @@ app.addEventListener("click", async (ev) => {
                 menu(t("changeDay"), p.days.map((dd, i) => ({ label: `${i + 1}. ${nm(dd.name)}`, on: async () => { p.nextDay = i; await saveProgram(p); } })));
                 return;
             }
+            case "toggleBackup":
+                A.settings.backupOpen = !A.settings.backupOpen;
+                await saveSettings();
+                break;
+            case "resumeMenu":
+                menu(t("inProgress"), [{ label: t("finishNow"), on: () => askFinish(s) }, { label: t("discard"), danger: true, on: () => askDiscard(s) }]);
+                return;
+            case "wkList":
+                A.sheet = { kind: "order" };
+                break;
+            case "gotoClose":
+                s.idx = +v;
+                A.sheet = null;
+                await saveSession(s);
+                render();
+                centerStrip();
+                return;
             case "openWorkout":
                 A.nav = [{ v: "today", p: {} }, { v: "workout", p: {} }];
                 render();
@@ -916,7 +965,16 @@ app.addEventListener("click", async (ev) => {
                 return;
             case "wNum": {
                 const e = s.exercises[s.idx], x = e.sets[+v], f = d.f, ex = exById(e.exId);
-                numSheet(f === "load" ? t("weight") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : { step: 1 }, async (n) => { x[f] = n; x.edited = { ...(x.edited || {}), [f]: true }; await saveSession(s); });
+                numSheet(f === "load" ? t("weight") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : { step: 1 }, async (n) => {
+                    const old = x[f];
+                    x[f] = n;
+                    x.edited = { ...(x.edited || {}), [f]: true };
+                    if (f === "load" && x.type !== "warmup")
+                        for (const y of e.sets.slice(+v + 1))
+                            if (!y.done && !y.edited?.load && y.type !== "warmup" && y.load === old)
+                                y.load = n;
+                    await saveSession(s);
+                });
                 return;
             }
             case "wRir": {
@@ -971,13 +1029,11 @@ app.addEventListener("click", async (ev) => {
                 s.rest = null;
                 await saveSession(s);
                 break;
-            case "askFinish": {
-                const n = s.exercises.reduce((acc, e) => acc + e.sets.filter((x) => x.done && isWork(x)).length, 0);
-                confirmSheet(t("confirmFinish"), t("confirmFinishBody", { n }), t("finish"), false, async () => { await finishSession(s); });
+            case "askFinish":
+                askFinish(s);
                 return;
-            }
             case "askDiscard":
-                confirmSheet(t("confirmDiscard"), t("confirmDiscardBody"), t("discard"), true, async () => { s.status = "discarded"; s.discardedAt = now(); await saveSession(s); releaseWake(); A.nav = [{ v: "today", p: {} }]; });
+                askDiscard(s);
                 return;
             // suggestions
             case "sgAccept":
@@ -1077,15 +1133,6 @@ app.addEventListener("click", async (ev) => {
             case "openDay":
                 go("day", { id: d.id, d: +v });
                 return;
-            case "dayUp":
-            case "dayDown": {
-                const p = findProg(d.id), i = +v, j = a === "dayUp" ? i - 1 : i + 1;
-                const nextId = p.days[p.nextDay]?.id;
-                [p.days[i], p.days[j]] = [p.days[j], p.days[i]];
-                p.nextDay = Math.max(0, p.days.findIndex((x) => x.id === nextId));
-                await saveProgram(p);
-                break;
-            }
             case "addDay": {
                 const p = findProg(d.id);
                 const n = p.days.length + 1;
@@ -1098,6 +1145,8 @@ app.addEventListener("click", async (ev) => {
                 menu(nm(dd.name), [
                     { label: t("renameDay"), on: () => textSheet(t("renameDay"), nm(dd.name), async (val) => { dd.name = { en: val, it: val }; await saveProgram(p); }) },
                     { label: t("setNext"), on: async () => { p.nextDay = i; await saveProgram(p); } },
+                    ...(i > 0 ? [{ label: t("moveUp"), on: () => reorder({ sort: "days", id: p.id }, i, i - 1) }] : []),
+                    ...(i < p.days.length - 1 ? [{ label: t("moveDown"), on: () => reorder({ sort: "days", id: p.id }, i, i + 1) }] : []),
                     { label: t("duplicate"), on: async () => { const c = JSON.parse(JSON.stringify(dd)); c.id = uid(); c.name = { en: nm(dd.name) + " (2)", it: nm(dd.name) + " (2)" }; c.exercises.forEach((pe) => { pe.id = uid(); pe.sets.forEach((x) => x.id = uid()); }); p.days.splice(i + 1, 0, c); await saveProgram(p); } },
                     { label: t("deleteDay"), danger: true, on: () => confirmSheet(t("deleteDay"), nm(dd.name), t("delete"), true, async () => { p.days.splice(i, 1); p.nextDay = Math.min(p.nextDay, Math.max(0, p.days.length - 1)); await saveProgram(p); back(); }) },
                 ]);
@@ -1106,13 +1155,6 @@ app.addEventListener("click", async (ev) => {
             case "openPe":
                 go("pe", { id: d.id, d: +d.d, e: +v });
                 return;
-            case "peUp":
-            case "peDown": {
-                const p = findProg(d.id), ex = p.days[+d.d].exercises, i = +v, j = a === "peUp" ? i - 1 : i + 1;
-                [ex[i], ex[j]] = [ex[j], ex[i]];
-                await saveProgram(p);
-                break;
-            }
             case "pickFor":
                 go("pick", { mode: d.mode, id: d.id, d: +d.d, e: d.e != null ? +d.e : null });
                 return;
@@ -1120,6 +1162,8 @@ app.addEventListener("click", async (ev) => {
                 const p = findProg(d.id), day = p.days[+d.d], i = +v, pe = day.exercises[i];
                 menu(exName(pe.exId), [
                     { label: t("replaceEx"), on: () => go("pick", { mode: "replacePe", id: p.id, d: +d.d, e: i }) },
+                    ...(i > 0 ? [{ label: t("moveUp"), on: async () => { await reorder({ sort: "day", id: p.id, d: d.d }, i, i - 1); A.nav[A.nav.length - 1].p.e = i - 1; } }] : []),
+                    ...(i < day.exercises.length - 1 ? [{ label: t("moveDown"), on: async () => { await reorder({ sort: "day", id: p.id, d: d.d }, i, i + 1); A.nav[A.nav.length - 1].p.e = i + 1; } }] : []),
                     { label: t("duplicate"), on: async () => { const c = JSON.parse(JSON.stringify(pe)); c.id = uid(); c.sets.forEach((x) => x.id = uid()); day.exercises.splice(i + 1, 0, c); await saveProgram(p); } },
                     ...p.days.map((dd, k) => k === +d.d ? null : { label: `${t("moveTo")}: ${nm(dd.name)}`, on: async () => { day.exercises.splice(i, 1); dd.exercises.push(pe); await saveProgram(p); back(); } }).filter(Boolean),
                     { label: t("deleteEx"), danger: true, on: () => confirmSheet(t("deleteEx"), exName(pe.exId), t("delete"), true, async () => { day.exercises.splice(i, 1); await saveProgram(p); back(); }) },
@@ -1246,6 +1290,38 @@ app.addEventListener("click", async (ev) => {
     }
     render();
 });
+function askFinish(s) {
+    const n = s.exercises.reduce((acc, e) => acc + e.sets.filter((x) => x.done && isWork(x)).length, 0);
+    confirmSheet(t("confirmFinish"), t("confirmFinishBody", { n }), t("finish"), false, async () => { await finishSession(s); });
+}
+function askDiscard(s) {
+    confirmSheet(t("confirmDiscard"), t("confirmDiscardBody"), t("discard"), true, async () => { s.status = "discarded"; s.discardedAt = now(); await saveSession(s); releaseWake(); A.nav = [{ v: "today", p: {} }]; });
+}
+const moveItem = (arr, from, to) => { const [x] = arr.splice(from, 1); arr.splice(to, 0, x); };
+/** Apply a drag (or menu) reorder to the list a .sortable element describes. */
+async function reorder(ds, from, to) {
+    if (from === to)
+        return;
+    if (ds.sort === "days") {
+        const p = findProg(ds.id);
+        const nextId = p.days[p.nextDay]?.id;
+        moveItem(p.days, from, to);
+        p.nextDay = Math.max(0, p.days.findIndex((x) => x.id === nextId));
+        await saveProgram(p);
+    }
+    if (ds.sort === "day") {
+        const p = findProg(ds.id);
+        moveItem(p.days[+ds.d].exercises, from, to);
+        await saveProgram(p);
+    }
+    if (ds.sort === "wk") {
+        const s = activeSession();
+        const cur = s.exercises[s.idx];
+        moveItem(s.exercises, from, to);
+        s.idx = s.exercises.indexOf(cur);
+        await saveSession(s);
+    }
+}
 async function picked(ctx, exId) {
     const s = activeSession();
     if (ctx.mode === "addToDay") {
@@ -1383,6 +1459,78 @@ app.addEventListener("change", async (ev) => {
         render();
     }
 });
+/* drag to reorder: grab the handle, move, release */
+let drag = null;
+app.addEventListener("pointerdown", ev => {
+    const hd = ev.target.closest("[data-handle]");
+    if (!hd)
+        return;
+    const item = hd.closest(".sort-item");
+    const list = item?.parentElement;
+    if (!item || !list?.classList.contains("sortable"))
+        return;
+    ev.preventDefault();
+    const items = Array.from(list.children).filter(c => c.classList.contains("sort-item"));
+    const rects = items.map(x => x.getBoundingClientRect());
+    const from = items.indexOf(item);
+    const gap = items.length > 1 ? Math.max(0, rects[1].top - rects[0].bottom) : 0;
+    const scroller = list.closest(".scroll, .sheet");
+    drag = { list, items, rects, from, to: from, item, scroller, startY: ev.clientY, lastY: ev.clientY, startScroll: scroller ? scroller.scrollTop : 0, step: rects[from].height + gap, pid: ev.pointerId, raf: 0 };
+    try {
+        hd.setPointerCapture(ev.pointerId);
+    }
+    catch { }
+    item.classList.add("dragging");
+    list.classList.add("sorting");
+    haptic();
+    const loop = () => { if (!drag)
+        return; const sc = drag.scroller; if (sc) {
+        const r = sc.getBoundingClientRect();
+        if (drag.lastY < r.top + 70)
+            sc.scrollTop -= 8;
+        else if (drag.lastY > r.bottom - 70)
+            sc.scrollTop += 8;
+    } layoutDrag(); drag.raf = requestAnimationFrame(loop); };
+    drag.raf = requestAnimationFrame(loop);
+});
+function layoutDrag() {
+    const g = drag;
+    const ds = (g.scroller ? g.scroller.scrollTop : 0) - g.startScroll;
+    const dy = g.lastY - g.startY + ds;
+    g.item.style.transform = `translateY(${dy}px)`;
+    const c = g.rects[g.from].top + g.rects[g.from].height / 2 + dy;
+    const to = g.rects.filter((r, i) => i !== g.from && r.top + r.height / 2 < c).length;
+    g.items.forEach((el, i) => {
+        if (i === g.from)
+            return;
+        const sh = g.from < to && i > g.from && i <= to ? -g.step : g.from > to && i < g.from && i >= to ? g.step : 0;
+        el.style.transform = sh ? `translateY(${sh}px)` : "";
+    });
+    if (to !== g.to) {
+        g.to = to;
+        haptic();
+    }
+}
+app.addEventListener("pointermove", ev => { if (drag && ev.pointerId === drag.pid) {
+    drag.lastY = ev.clientY;
+    ev.preventDefault();
+} });
+const endDrag = async (ev) => {
+    if (!drag || ev.pointerId !== drag.pid)
+        return;
+    const g = drag;
+    drag = null;
+    cancelAnimationFrame(g.raf);
+    g.items.forEach((el) => { el.style.transform = ""; });
+    g.item.classList.remove("dragging");
+    g.list.classList.remove("sorting");
+    if (g.to !== g.from) {
+        await reorder(g.list.dataset, g.from, g.to);
+    }
+    render();
+};
+app.addEventListener("pointerup", endDrag);
+app.addEventListener("pointercancel", endDrag);
 /* swipe between exercises */
 let sx = null, sy = 0;
 app.addEventListener("touchstart", e => { if (!e.target.closest("#wkbody") || A.sheet)
@@ -1413,7 +1561,7 @@ setInterval(() => {
         haptic();
         saveSession(s);
     }
-    if (A.sheet)
+    if (A.sheet || drag)
         return;
     app.querySelectorAll("[data-clock]").forEach(n => n.textContent = (route().v === "workout" && s.pausedAt ? t("paused") + " · " : "") + clock(elapsed(s)));
     const rb = app.querySelector("[data-restbar]");

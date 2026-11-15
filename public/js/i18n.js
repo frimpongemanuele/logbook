@@ -1,4 +1,5 @@
 const en = {
+    inProgress: "Workout in progress", startedAt: "started {t}", backupShort: "Back up your data", reorder: "Exercise order", dragHint: "Drag to reorder", dragTip: "Drag ⠿ to change the order", nextUp: "Next",
     welcome: "Welcome to Logbook", welcomeBody: "Restore your backup file to load your program and history, or start fresh.",
     today: "Today", history: "History", programs: "Programs", library: "Library", more: "More",
     next: "Next in rotation", dayOf: "Day {a} of {b}", start: "Start workout", changeDay: "Change day", emptyWorkout: "Empty workout",
@@ -49,6 +50,7 @@ const en = {
     saved: "Saved", sec: "s", restOn: "rest", added: "added", workoutStarted: "Workout started",
 };
 const it = {
+    inProgress: "Allenamento in corso", startedAt: "iniziato alle {t}", backupShort: "Fai un backup dei dati", reorder: "Ordine esercizi", dragHint: "Trascina per riordinare", dragTip: "Trascina ⠿ per cambiare l'ordine", nextUp: "Prossimo",
     welcome: "Benvenuto in Logbook", welcomeBody: "Ripristina il tuo file di backup per caricare scheda e storico, oppure parti da zero.",
     today: "Oggi", history: "Storico", programs: "Schede", library: "Esercizi", more: "Altro",
     next: "Prossimo in rotazione", dayOf: "Giorno {a} di {b}", start: "Inizia allenamento", changeDay: "Cambia giorno", emptyWorkout: "Allenamento libero",
