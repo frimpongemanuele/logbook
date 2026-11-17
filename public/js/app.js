@@ -2,10 +2,10 @@
 import * as db from "./db.js";
 import { t, setLang, getLang } from "./i18n.js";
 import { seedExercises, MUSCLES } from "./seed.js";
-import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2 } from "./domain.js";
+import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2, fmtRange, OPEN_MARGIN } from "./domain.js";
 import { setsCsv, mergeImport } from "./data.js";
-import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine } from "./importer.js";
-export const VERSION = "0.6.0";
+import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine, dayName } from "./importer.js";
+export const VERSION = "0.7.0";
 const DAY = 86400000;
 const A = {
     lib: new Map(), programs: [], sessions: [],
@@ -139,6 +139,7 @@ async function boot() {
         exs.forEach((e) => A.lib.set(e.id, e));
         A.programs = await db.all("programs");
         A.sessions = await db.all("sessions");
+        await migrateData();
         A.settings = { ...A.settings, ...(await db.getMeta("settings", {})) };
         if (!(await db.getMeta("settings", null))) {
             A.settings.lang = (navigator.language || "").toLowerCase().startsWith("it") ? "it" : "en";
@@ -157,6 +158,80 @@ async function boot() {
     catch (err) {
         app.innerHTML = `<div class="scroll"><h1>Storage error</h1><p class="sub">${esc(err && err.message)}</p></div>`;
     }
+}
+/** v0.7 data fixes, idempotent: AMRAP "Max/8" → 8+ to failure; "Piramidale" note → pyramid scheme;
+ *  OCR'd day names ("Ese 5abato …"); custom exercises that now exist in the library are merged into it. */
+async function migrateData() {
+    const touchedP = new Set(), touchedS = new Set(), touchedE = [];
+    for (const p of A.programs)
+        for (const d of p.days) {
+            if (/(^|\s)[05][a-zà-ù]{3,}/i.test(d.name.en || "")) {
+                const n = dayName(d.name.en);
+                d.name = { en: n, it: n };
+                touchedP.add(p);
+            }
+            for (const pe of d.exercises) {
+                for (const st of pe.sets)
+                    if (st.type === "amrap" && st.repsMax != null && st.repsMax === st.repsMin) {
+                        st.repsMax = null;
+                        if (st.rir === 2)
+                            st.rir = 0;
+                        touchedP.add(p);
+                    }
+                if (/Piramidale \/ pyramid/.test(pe.notes || "")) {
+                    pe.scheme = "pyr_asc";
+                    pe.notes = pe.notes.replace(/\s*·?\s*Piramidale \/ pyramid/, "").trim();
+                    touchedP.add(p);
+                }
+            }
+        }
+    const key = (x) => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+    const seeds = [...A.lib.values()].filter((e) => !e.custom && !e.archived);
+    const byName = new Map();
+    for (const sd of seeds)
+        for (const n of [sd.name.en, sd.name.it, ...(sd.aliases || [])])
+            if (!byName.has(key(n)))
+                byName.set(key(n), sd);
+    for (const c of [...A.lib.values()]) {
+        if (!c.custom || c.archived)
+            continue;
+        const sd = byName.get(key(c.name.en)) || byName.get(key(c.name.it));
+        if (!sd)
+            continue;
+        for (const p of A.programs)
+            for (const d of p.days)
+                for (const pe of d.exercises)
+                    if (pe.exId === c.id) {
+                        pe.exId = sd.id;
+                        touchedP.add(p);
+                    }
+        for (const s of A.sessions)
+            for (const e of s.exercises) {
+                if (e.exId === c.id) {
+                    e.exId = sd.id;
+                    e.name = sd.name;
+                    touchedS.add(s);
+                }
+                if (e.plannedExId === c.id) {
+                    e.plannedExId = sd.id;
+                    touchedS.add(s);
+                }
+            }
+        c.archived = true;
+        c.mergedInto = sd.id;
+        c.updatedAt = now();
+        touchedE.push(c);
+    }
+    for (const p of touchedP) {
+        p.updatedAt = now();
+        await db.put("programs", p);
+    }
+    for (const s of touchedS) {
+        s.updatedAt = now();
+        await db.put("sessions", s);
+    }
+    if (touchedE.length)
+        await db.putMany("exercises", touchedE);
 }
 /* ---------------- previous performance & session building ---------------- */
 function lastPerf(exId, excludeId) {
@@ -192,7 +267,7 @@ function sessionExercise(pe) {
     const ex = exById(pe.exId);
     return {
         id: uid(), peId: pe.id, exId: pe.exId, plannedExId: pe.exId, name: ex.name, group: pe.group || null, optional: !!pe.optional,
-        rest: pe.rest ?? null, notes: pe.notes || "", skipped: false, sets: buildSets(pe.sets, pe.exId),
+        rest: pe.rest ?? null, notes: pe.notes || "", scheme: pe.scheme || "straight", skipped: false, sets: buildSets(pe.sets, pe.exId),
     };
 }
 const defaultTemplates = (track = "wr") => [0, 1, 2].map(() => track === "time" ? { id: uid(), type: "working", load: null, repsMin: 0, repsMax: 0, rir: null, mins: 10 }
@@ -401,7 +476,7 @@ function vWorkout(s) {
       <button class="cell num ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps}</button>
       <button class="cell num ${g("rir")}" data-a="wRir" data-v="${i}" aria-label="RIR">${x.rir == null ? "–" : x.rir}</button>`;
         const tgt = !isWork(x) || !x.t ? "" : tr === "time" ? (x.t.mins != null ? `${fmt(x.t.mins)} min` : "")
-            : `${x.t.repsMin}${x.t.repsMax !== x.t.repsMin ? "–" + x.t.repsMax : ""}${tr === "wr" && x.t.rir != null ? " @ RIR " + x.t.rir : ""}`;
+            : `${fmtRange(x.t.repsMin, x.t.repsMax)}${tr === "wr" && x.t.rir != null ? " @ RIR " + x.t.rir : ""}`;
         return `<div class="set ${x.done ? "done" : ""}">
       <button data-a="setMenu" data-v="${i}" aria-label="${t("set")} ${i + 1}">${badge(e, i)}</button>
       <div class="last num">${last}</div>
@@ -414,7 +489,7 @@ function vWorkout(s) {
     const body = `<div class="wk-body scroll" id="wkbody">
     <div class="row spread top"><h2 class="ex-name">${esc(nm(e.name))}</h2><button class="iconbtn" data-a="exMenu" aria-label="${t("edit")}">${I.dots}</button></div>
     <div class="ex-meta"><span class="pill">${t("eq_" + (ex?.equipment || "other"))}</span><button class="pill num pillbtn" data-a="restEdit">${t("restOn")} ${rest}${t("sec")} ✎</button>${(ex?.track || "wr") === "wr" ? `<span class="pill num">+${fmt(ex?.inc)} kg</span>` : ""}
-      ${e.optional ? `<span class="pill">${t("optional")}</span>` : ""}${e.skipped ? `<span class="pill warn">${t("skip")}</span>` : ""}${partner ? `<span class="pill accent">${t("superset")} ${esc(e.group)}: ${partner}</span>` : ""}</div>
+      ${e.scheme && e.scheme !== "straight" ? `<span class="pill accent">${t("sch_" + e.scheme + "_s")}</span>` : ""}${e.optional ? `<span class="pill">${t("optional")}</span>` : ""}${e.skipped ? `<span class="pill warn">${t("skip")}</span>` : ""}${partner ? `<span class="pill accent">${t("superset")} ${esc(e.group)}: ${partner}</span>` : ""}</div>
     ${e.exId !== e.plannedExId ? `<div class="note">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
     ${e.notes ? `<div class="note">${esc(e.notes)}</div>` : ""}
     <div class="sets-head"><span>${t("set")}</span><span>${t("last")}</span>${(ex?.track || "wr") === "wr" ? `<span class="c">${t("kg")}</span><span class="c">${t("reps")}</span><span class="c">${t("rir")}</span>` : `<span class="c span3">${(ex?.track) === "time" ? t("minutes") : t("reps")}</span>`}<span></span></div>
@@ -501,6 +576,8 @@ function why(g) {
             w += t("whyPred", { w: fmt(Math.max(...g.loads)), p: Math.floor(g.predicted), r: g.predRir ?? 0 });
         if (g.unknownEffort)
             w += t("whyUnknown");
+        if (g.openEnded)
+            w += t("whyOpen", { n: OPEN_MARGIN });
         return w;
     }
     if (g.kind === "reps" && g.topNoLoad)
@@ -678,10 +755,10 @@ function vDay(p) {
     <div class="sortable" data-sort="day" data-id="${pr.id}" data-d="${p.d}">${d.exercises.map((pe, i) => {
         const ex = exById(pe.exId);
         const tr = ex?.track || "wr";
-        const sum = pe.sets.map((s) => tr === "time" ? `${fmt(s.mins ?? 0)} min` : tr === "reps" ? `×${s.repsMin}${s.repsMax !== s.repsMin ? "–" + s.repsMax : ""}`
-            : s.type === "warmup" ? `W ${loadTxt(ex, s.load ?? 0)}×${s.repsMin}` : `${s.load != null ? loadTxt(ex, s.load) + "×" : ""}${s.repsMin}${s.repsMax !== s.repsMin ? "–" + s.repsMax : ""}${s.rir != null ? "@" + s.rir : ""}`).join(" · ");
+        const sum = pe.sets.map((s) => tr === "time" ? `${fmt(s.mins ?? 0)} min` : tr === "reps" ? `×${fmtRange(s.repsMin, s.repsMax)}`
+            : s.type === "warmup" ? `W ${loadTxt(ex, s.load ?? 0)}×${s.repsMin}` : `${s.load != null ? loadTxt(ex, s.load) + "×" : ""}${fmtRange(s.repsMin, s.repsMax)}${s.rir != null ? "@" + s.rir : ""}`).join(" · ");
         return `<div class="card row sort-item"><button class="flex1 tl" data-a="openPe" data-id="${pr.id}" data-d="${p.d}" data-v="${i}">
-        <b>${esc(exName(pe.exId))}</b>${pe.group ? ` <span class="pill accent">${esc(pe.group)}</span>` : ""}${pe.optional ? ` <span class="pill">${t("optional")}</span>` : ""}
+        <b>${esc(exName(pe.exId))}</b>${pe.group ? ` <span class="pill accent">${esc(pe.group)}</span>` : ""}${pe.scheme && pe.scheme !== "straight" ? ` <span class="pill">${t("sch_" + pe.scheme + "_s")}</span>` : ""}${pe.optional ? ` <span class="pill">${t("optional")}</span>` : ""}
         <span class="sub block num">${sum}</span></button>
         <button class="handle" data-handle aria-label="${t("dragHint")}">${I.grip}</button></div>`;
     }).join("")}</div>${d.exercises.length > 1 ? `<p class="faint small c">${t("dragTip")}</p>` : ""}
@@ -704,15 +781,18 @@ function vPe(p) {
       <button data-a="tplType" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}" class="badge ${s.type === "warmup" ? "w" : s.type === "top" ? "acc" : ""}">${s.type === "warmup" ? "W" : s.type === "top" ? "T" : s.type === "backoff" ? "B" : s.type === "amrap" ? "A" : s.type === "drop" ? "D" : pe.sets.slice(0, i + 1).filter(isWork).length}</button>
       ${(ex?.track || "wr") === "time" ? `<button class="cell sm num span4" data-a="tplNum" data-f="mins" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${fmt(s.mins ?? 0)} min</button>`
         : ex.track === "reps" ? `<button class="cell sm num span2" data-a="tplNum" data-f="repsMin" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMin}</button>
-      <button class="cell sm num span2" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax}</button>`
+      <button class="cell sm num span2" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax == null ? "∞" : s.repsMax}</button>`
             : `<button class="cell sm num" data-a="tplNum" data-f="load" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.load == null ? "–" : loadTxt(ex, s.load)}</button>
       <button class="cell sm num" data-a="tplNum" data-f="repsMin" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMin}</button>
-      <button class="cell sm num" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax}</button>
+      <button class="cell sm num" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax == null ? "∞" : s.repsMax}</button>
       <button class="cell sm num" data-a="tplRir" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.rir ?? "–"}</button>`}
       <button class="iconbtn" data-a="tplDel" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}" aria-label="${t("deleteSet")}">${I.x}</button></div>`).join("")}
     <div class="row g8 mt4"><button class="addset flex1" data-a="tplAdd" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}">+ ${t("addSet")}</button><button class="addset flex1" data-a="tplAddWarm" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}">+ ${t("addWarmup")}</button></div>
     <h2>${t("restSec")}</h2>
     <button class="cell num wide" data-a="peRest" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}">${pe.rest ?? ex?.rest ?? 120} ${t("sec")}${pe.rest == null ? ` <span class="faint small">(${t("default")})</span>` : ""}</button>
+    <h2>${t("scheme")}</h2>
+    <select class="inp" data-in="peScheme" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" aria-label="${t("scheme")}">${["straight", "pyr_asc", "pyr_desc", "pyr_full", "topback", "drop"].map(k => `<option value="${k}" ${(pe.scheme || "straight") === k ? "selected" : ""}>${t("sch_" + k)}</option>`).join("")}</select>
+    <p class="faint small mt4">${t("sch_" + (pe.scheme || "straight") + "_d")}</p>
     <h2>${t("superset")}</h2>
     <div class="seg">${groups.map(g => `<button class="${(pe.group || "") === g ? "on" : ""}" data-a="peGroup" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${g}">${g || t("none")}</button>`).join("")}</div>
     <label class="toggle mt16"><input type="checkbox" ${pe.optional ? "checked" : ""} data-in="peOptional" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}"> ${t("optional")}</label>
@@ -870,7 +950,7 @@ function setsTxt(it) {
     if (ss[0].mins != null)
         return `${ss.length} × ${fmt(ss[0].mins)} min`;
     const same = ss.every(x => x.min === ss[0].min && x.max === ss[0].max);
-    const one = (x) => `${x.type === "amrap" ? "max " : ""}${x.min}${x.max !== x.min ? "–" + x.max : ""}`;
+    const one = (x) => `${x.type === "amrap" ? "AMRAP " : ""}${fmtRange(x.min, x.max)}`;
     return same ? `${ss.length} × ${one(ss[0])}` : `${ss.length} × ${ss.map(one).filter((x, i, a) => i === 0 || x !== a[i - 1]).join(", ")}`;
 }
 function vImport() {
@@ -894,7 +974,7 @@ function vImport() {
         h += im.days.map((d, di) => `<div class="card"><div class="row g8"><input class="inp flex1 dayinp" value="${esc(d.name)}" data-in="impDay" data-v="${di}" aria-label="${t("renameDay")}"><button class="iconbtn" data-a="impDelDay" data-v="${di}" aria-label="${t("deleteDay")}">${I.x}</button></div>
       ${d.items.map((it, ii) => `<div class="improw">
         <button class="flex1 tl" data-a="impPick" data-v="${di}" data-i="${ii}"><b class="${it.exId ? "" : "accent"}">${it.exId ? esc(exName(it.exId)) : t("newEx") + ": " + esc(it.name)}</b>${it.exId && norm2(exName(it.exId)) !== norm2(it.name) ? `<span class="faint small block">“${esc(it.name)}”</span>` : ""}</button>
-        <button class="cell sm num impsets" data-a="impEdit" data-v="${di}" data-i="${ii}">${setsTxt(it)}${it.rest ? ` · ${it.rest}${t("sec")}` : ""}</button>
+        <button class="cell sm num impsets" data-a="impEdit" data-v="${di}" data-i="${ii}">${setsTxt(it)}${it.rest ? ` · ${it.rest}${t("sec")}` : ""}${it.scheme ? `<span class="block small accent">${t("sch_" + it.scheme + "_s")}</span>` : ""}</button>
         <button class="iconbtn" data-a="impDel" data-v="${di}" data-i="${ii}" aria-label="${t("delete")}">${I.x}</button></div>`).join("")}</div>`).join("");
         return h + `<button class="btn primary block mt8" data-a="impCreate">${t("createProgram")}</button><button class="btn ghost block mt8" data-a="impReset">${t("startOver")}</button></div>`;
     }
@@ -1354,7 +1434,10 @@ app.addEventListener("click", async (ev) => {
             case "setMenu": {
                 const e = s.exercises[s.idx], i = +v;
                 menu(t("setType"), [
-                    ...["warmup", "working", "top", "backoff", "amrap", "drop"].map(k => ({ label: t(k), on: async () => { e.sets[i].type = k; await saveSession(s); } })),
+                    ...["warmup", "working", "top", "backoff", "amrap", "drop"].map(k => ({ label: t(k), on: async () => { const x = e.sets[i]; x.type = k; if (k === "amrap" && x.t) {
+                            x.t.repsMax = null;
+                            x.t.rir = 0;
+                        } await saveSession(s); } })),
                     { label: t("deleteSet"), danger: true, on: async () => { const removed = e.sets.splice(i, 1)[0]; await saveSession(s); toast(t("setDeleted"), async () => { e.sets.splice(i, 0, removed); await saveSession(s); }); } },
                 ]);
                 return;
@@ -1580,17 +1663,38 @@ app.addEventListener("click", async (ev) => {
             }
             case "tplType": {
                 const p = findProg(d.id), pe = p.days[+d.d].exercises[+d.e], x = pe.sets[+v];
-                menu(t("setType"), ["warmup", "working", "top", "backoff", "amrap", "drop"].map(k => ({ label: t(k), on: async () => { x.type = k; if (k === "warmup")
-                        x.rir = null;
-                    else if (x.rir == null)
-                        x.rir = 2; await saveProgram(p); } })));
+                menu(t("setType"), ["warmup", "working", "top", "backoff", "amrap", "drop"].map(k => ({ label: t(k), on: async () => {
+                        const was = x.type;
+                        x.type = k;
+                        if (k === "warmup")
+                            x.rir = null;
+                        else if (k === "amrap") {
+                            if (x.repsMax === x.repsMin)
+                                x.repsMax = null;
+                            x.rir = 0;
+                        }
+                        else if (x.rir == null)
+                            x.rir = 2;
+                        if (was === "amrap" && k !== "amrap" && x.repsMax == null)
+                            x.repsMax = x.repsMin + 2;
+                        await saveProgram(p);
+                    } })));
                 return;
             }
             case "tplNum": {
                 const p = findProg(d.id), pe = p.days[+d.d].exercises[+d.e], x = pe.sets[+v], f = d.f, ex = exById(pe.exId);
-                numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : f === "repsMin" ? t("repsMin") : t("repsMax"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async (n) => { x[f] = n; if (f === "repsMin" && x.repsMax < n)
-                    x.repsMax = n; if (f === "repsMax" && x.repsMin > n)
-                    x.repsMin = n; await saveProgram(p); });
+                numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : f === "repsMin" ? t("repsMin") : t("repsMaxHint"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async (n) => {
+                    if (f === "repsMax" && n === 0)
+                        x.repsMax = null; // no upper limit (AMRAP 8+)
+                    else {
+                        x[f] = n;
+                        if (f === "repsMin" && x.repsMax != null && x.repsMax < n)
+                            x.repsMax = n;
+                        if (f === "repsMax" && x.repsMin > n)
+                            x.repsMin = n;
+                    }
+                    await saveProgram(p);
+                });
                 return;
             }
             case "tplRir": {
@@ -1681,7 +1785,7 @@ app.addEventListener("click", async (ev) => {
             }
             case "impEdit": {
                 const it = A.imp.days[+v].items[+d.i];
-                const cur = `${it.sets.length} x ${it.sets[0]?.mins != null ? fmt(it.sets[0].mins) + " min" : it.sets.map((x) => (x.type === "amrap" ? "max/" : "") + x.min + (x.max !== x.min ? "-" + x.max : "")).filter((x, i, a) => a.indexOf(x) === i).join(", ")}${it.rest ? " " + it.rest + "s" : ""}`;
+                const cur = `${it.sets.length} x ${it.sets[0]?.mins != null ? fmt(it.sets[0].mins) + " min" : it.sets.map((x) => (x.type === "amrap" ? "max/" : "") + x.min + (x.max != null && x.max !== x.min ? "-" + x.max : "")).filter((x, i, a) => a.indexOf(x) === i).join(", ")}${it.rest ? " " + it.rest + "s" : ""}`;
                 textSheet(t("setsReps"), cur, async (val) => { const p = parseExerciseLine("Item " + val); if (p) {
                     it.sets = p.sets;
                     if (p.rest != null)
@@ -2053,6 +2157,13 @@ app.addEventListener("change", async (ev) => {
     }
     if (k === "fPrim") {
         A.form.muscles = [{ m: el.value, role: "primary" }, ...A.form.muscles.filter((m) => m.role === "secondary" && m.m !== el.value)];
+        render();
+        return;
+    }
+    if (k === "peScheme") {
+        const p = findProg(d.id);
+        p.days[+d.d].exercises[+d.e].scheme = el.value;
+        await saveProgram(p);
         render();
         return;
     }

@@ -75,6 +75,7 @@ const ROWS = [
     ["stairs", "Stair Climber", "Stepper", "Stairmaster|Scale", "machine", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "time"],
     ["walk", "Walking", "Camminata", "Incline walk|Camminata in salita", "other", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "time"],
     ["run", "Running", "Corsa", "Run|Jogging", "other", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "time"],
+    ["sarow", "Single-Arm Cable Row", "Rematore monolaterale ai cavi", "Row presa singola|Rematore presa singola|Single arm row|One arm cable row|Rematore a un braccio|Row monolaterale", "cable", "horizontal_pull", "compound", "external", 2.5, 90, "back", "biceps"],
     ["burpee", "Burpees", "Burpee", "Burpees", "bodyweight", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "reps"],
 ];
 export const MUSCLES = ["chest", "back", "shoulders", "biceps", "triceps", "forearms", "quads", "hamstrings", "glutes", "calves", "abs", "cardio"];

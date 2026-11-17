@@ -2,6 +2,12 @@
 export type Lang = "en" | "it";
 
 const en: Record<string, string> = {
+  scheme: "Scheme", repsMaxHint: "Max reps (0 = no limit)",
+  whyOpen: " No upper rep limit on this set (AMRAP): load goes up once you beat the minimum by {n}+ reps.",
+  sch_straight: "Straight sets", sch_pyr_asc: "Ascending pyramid", sch_pyr_desc: "Descending (reverse) pyramid", sch_pyr_full: "Full (triangular) pyramid", sch_topback: "Top set + back-off", sch_drop: "Drop sets",
+  sch_straight_s: "Straight", sch_pyr_asc_s: "Pyramid ↑", sch_pyr_desc_s: "Pyramid ↓", sch_pyr_full_s: "Pyramid ↑↓", sch_topback_s: "Top + back-off", sch_drop_s: "Drop sets",
+  sch_straight_d: "Same target every set.", sch_pyr_asc_d: "Weight goes up, reps go down set by set.", sch_pyr_desc_d: "Start heaviest, then lighter with more reps.",
+  sch_pyr_full_d: "Up to a peak, then back down.", sch_topback_d: "One heavy top set, then lighter back-off sets.", sch_drop_d: "Lower the weight and keep going without rest.",
   swipeTip: "Swipe a workout left to delete it", swipeTipEx: "Swipe an exercise left to delete it", workoutDeleted: "Workout deleted",
   deleteForever: "Delete permanently", cantUndo: "This can't be undone.", deletedEx: "Deleted exercises", exRestored: "Exercise restored",
   deleteExercise: "Delete exercise", exDeleted: "{x} deleted", deleteExQ: "Delete {x}?",
@@ -79,6 +85,12 @@ const en: Record<string, string> = {
 };
 
 const it: Record<string, string> = {
+  scheme: "Schema", repsMaxHint: "Rip. max (0 = nessun limite)",
+  whyOpen: " Nessun limite di ripetizioni su questa serie (AMRAP): il carico sale quando superi il minimo di {n}+ ripetizioni.",
+  sch_straight: "Straight sets (serie classiche)", sch_pyr_asc: "Ascending pyramid (piramidale crescente)", sch_pyr_desc: "Descending pyramid (piramidale discendente o inverso)", sch_pyr_full: "Full pyramid (piramidale completo)", sch_topback: "Top set + back-off (serie pesante + scarico)", sch_drop: "Drop set (stripping)",
+  sch_straight_s: "Classiche", sch_pyr_asc_s: "Piramidale ↑", sch_pyr_desc_s: "Piramidale ↓", sch_pyr_full_s: "Piramidale ↑↓", sch_topback_s: "Top + scarico", sch_drop_s: "Drop set",
+  sch_straight_d: "Stesso obiettivo in ogni serie.", sch_pyr_asc_d: "Il peso sale e le ripetizioni scendono serie dopo serie.", sch_pyr_desc_d: "Si parte dal peso più alto, poi più leggero con più ripetizioni.",
+  sch_pyr_full_d: "Si sale fino al picco, poi si ridiscende.", sch_topback_d: "Una serie pesante, poi serie di scarico più leggere.", sch_drop_d: "Scala il peso e continua senza recupero.",
   swipeTip: "Scorri un allenamento a sinistra per eliminarlo", swipeTipEx: "Scorri un esercizio a sinistra per eliminarlo", workoutDeleted: "Allenamento eliminato",
   deleteForever: "Elimina definitivamente", cantUndo: "Non si può annullare.", deletedEx: "Esercizi eliminati", exRestored: "Esercizio ripristinato",
   deleteExercise: "Elimina esercizio", exDeleted: "{x} eliminato", deleteExQ: "Eliminare {x}?",
@@ -115,7 +127,7 @@ const it: Record<string, string> = {
   set: "Serie", last: "Prec.", kg: "kg", reps: "Rip.", rir: "RIR", target: "Obiettivo", addSet: "Aggiungi serie", addWarmup: "Aggiungi riscaldamento", rest: "Recupero", skip: "Salta",
   prev: "Precedente", nextEx: "Successivo", finish: "Fine", pause: "Pausa", paused: "In pausa", resumeBtn: "Riprendi", restDone: "Recupero finito",
   weight: "Peso", done: "Fatto", rpe: "RPE", optional: "facoltativo", superset: "Superserie", group: "Gruppo", none: "Nessuno",
-  setType: "Tipo di serie", warmup: "Riscaldamento", working: "Allenante", top: "Top set", backoff: "Back-off", amrap: "AMRAP", drop: "Drop set", deleteSet: "Elimina serie",
+  setType: "Tipo di serie", warmup: "Warm-up (riscaldamento)", working: "Working set (serie allenante)", top: "Top set (serie pesante)", backoff: "Back-off (serie di scarico)", amrap: "AMRAP (cedimento)", drop: "Drop set (stripping)", deleteSet: "Elimina serie",
   setDeleted: "Serie eliminata", undo: "Annulla", exSkipped: "Esercizio saltato",
   skipEx: "Salta esercizio", unskipEx: "Ripristina esercizio", substitute: "Sostituisci…", moveUp: "Sposta prima", moveDown: "Sposta dopo", addExercise: "Aggiungi esercizio",
   replaces: "sostituisce {x}", cancel: "Annulla", save: "Salva", delete: "Elimina", edit: "Modifica", back: "Indietro",

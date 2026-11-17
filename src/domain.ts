@@ -9,10 +9,16 @@ export interface LoggedSet {
   mins?: number | null;
   rir: number | null;
   done: boolean;
-  t?: { repsMin: number; repsMax: number; rir: number | null };
+  t?: { repsMin: number; repsMax: number | null; rir: number | null };
 }
 
 export const isWork = (s: { type: SetType }) => s.type !== "warmup";
+
+/** No upper rep limit (AMRAP "8+"): load goes up once every set beats the minimum by this many reps. */
+export const OPEN_MARGIN = 4;
+export const effMax = (t: { repsMin: number; repsMax: number | null }) => (t.repsMax == null ? t.repsMin + OPEN_MARGIN : t.repsMax);
+/** 8–10 · 8 · 8+ */
+export const fmtRange = (min: number, max: number | null | undefined) => (max == null ? `${min}+` : max === min ? `${min}` : `${min}–${max}`);
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -62,7 +68,8 @@ export interface Suggestion {
   inc: number;
   predicted: number | null; // predicted reps at the new top-set load (kind "up")
   predRir: number | null;
-  topNoLoad?: boolean;      // top of range reached but no load step exists: raise the rep target
+  topNoLoad?: boolean;
+  openEnded?: boolean;      // at least one set had no rep ceiling (AMRAP 8+)      // top of range reached but no load step exists: raise the rep target
 }
 
 /**
@@ -80,14 +87,15 @@ export function suggest(sets: LoggedSet[], inc: number): Suggestion | null {
     return adjReps(s.reps, s.rir, s.t!.rir);
   });
   const loads = ws.map(s => s.load);
-  const base: Suggestion = { kind: "hold", loads, adj, setNo: null, limitAdj: null, limitTarget: null, harder: false, unknownEffort, inc, predicted: null, predRir: null };
-  const allTop = ws.every((s, i) => adj[i] >= s.t!.repsMax);
+  const openEnded = ws.some(s => s.t!.repsMax == null);
+  const base: Suggestion = { kind: "hold", loads, adj, setNo: null, limitAdj: null, limitTarget: null, harder: false, unknownEffort, inc, predicted: null, predRir: null, openEnded };
+  const allTop = ws.every((s, i) => adj[i] >= effMax(s.t!));
   if (allTop && !(inc > 0)) {
     // nothing to add load with (bodyweight / no step): progress by raising the rep target instead
     return { ...base, kind: "reps", setNo: null, limitAdj: null, limitTarget: null, topNoLoad: true } as Suggestion;
   }
   if (allTop) {
-    const twoSteps = ws.every((s, i) => adj[i] >= s.t!.repsMax + 2);
+    const twoSteps = ws.every((s, i) => adj[i] >= effMax(s.t!) + 2);
     let step = inc;
     // two increments only if predicted reps at the heavier top-set load stay in range
     const topIdx = loads.indexOf(Math.max(...loads));
@@ -106,8 +114,8 @@ export function suggest(sets: LoggedSet[], inc: number): Suggestion | null {
     return i;
   };
   if (allMin) {
-    const i = pick(j => adj[j] < ws[j].t!.repsMax);
-    return { ...base, kind: "reps", setNo: i + 1, limitAdj: adj[i], limitTarget: ws[i].t!.repsMax };
+    const i = pick(j => adj[j] < effMax(ws[j].t!));
+    return { ...base, kind: "reps", setNo: i + 1, limitAdj: adj[i], limitTarget: effMax(ws[i].t!) };
   }
   const i = pick(j => adj[j] < ws[j].t!.repsMin);
   const s = ws[i];

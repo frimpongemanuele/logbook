@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseReps, parseRest, parseExerciseLine, parseAny, parseLog, readXlsx, matchExercise, matchAll, buildProgramFromPlan, buildSessionsFromLog, dayName, cleanLine } from "../public/js/importer.js";
+import { parseReps, parseRest, parseExerciseLine, parseAny, parseLog, readXlsx, matchExercise, matchAll, buildProgramFromPlan, buildSessionsFromLog, dayName, cleanLine, schemeOf } from "../public/js/importer.js";
 import { seedExercises } from "../public/js/seed.js";
-import { suggest } from "../public/js/domain.js";
+import { suggest, fmtRange } from "../public/js/domain.js";
 
 const lib = seedExercises(0); const libMap = new Map(lib.map(e => [e.id, e]));
 const nm = id => libMap.get(id)?.name.en ?? null;
@@ -10,7 +10,7 @@ const nm = id => libMap.get(id)?.name.en ?? null;
 test("reps: ranges, lists, pyramids, AMRAP, time", () => {
   assert.deepEqual(parseReps("8-10", 2).map(s => [s.min, s.max]), [[8, 10], [8, 10]]);
   assert.deepEqual(parseReps("7, 8-10", 3).map(s => [s.min, s.max]), [[7, 7], [8, 10], [8, 10]]);
-  assert.deepEqual(parseReps("Max/8", 2).map(s => [s.type, s.min]), [["amrap", 8], ["amrap", 8]]);
+  assert.deepEqual(parseReps("Max/8", 2).map(s => [s.type, s.min, s.max]), [["amrap", 8, null], ["amrap", 8, null]]);   // at least 8, no ceiling
   assert.equal(parseReps("1 min", 3)[0].mins, 1);
   assert.equal(parseReps("45 sec", 1)[0].mins, 0.75);
 });
@@ -21,7 +21,7 @@ test("rest: 120\" · 90s · 1'30 · 2 min · 1:30", () => {
 test("OCR-style table line with row number, muscle column and noise", () => {
   const it = parseExerciseLine('3 Petto Panca piana bilanciere 3-7, 8-10 (Piramidale 120"');
   assert.equal(it.name, "Panca piana bilanciere"); assert.equal(it.muscle, "chest");
-  assert.deepEqual(it.sets.map(s => s.min), [7, 8, 8]); assert.equal(it.rest, 120); assert.match(it.notes, /Piramidale/);
+  assert.deepEqual(it.sets.map(s => s.min), [7, 8, 8]); assert.equal(it.rest, 120); assert.equal(it.scheme, "pyr_asc"); assert.equal(it.notes, "");
   const b = parseExerciseLine('& Tricipiti French Press EZ 3 10-12 60"');
   assert.equal(b.name, "French Press EZ"); assert.equal(b.muscle, "triceps");
   assert.equal(parseExerciseLine("Squat 4x6-8 3'").rest, 180);
@@ -30,6 +30,7 @@ test("OCR-style table line with row number, muscle column and noise", () => {
 test("day headers, with OCR misreads", () => {
   assert.equal(dayName("di LUNEDÌ {PUSH A)"), "Lunedì (Push A)");
   assert.equal(dayName("BREE SABATO (PULL 8 - SPESSORE)"), "Sabato (Pull B - Spessore)");
+  assert.equal(dayName("Ese 5abato (Pull B - Spessore)"), "Sabato (Pull B - Spessore)");
   assert.equal(cleanLine("12. Dorso | Rematore"), "Dorso Rematore");
 });
 test("free-text plan with days → matched exercises", () => {
@@ -46,7 +47,8 @@ test("matching: Italian names, OCR typos, glued words, no false friends", () => 
   assert.equal(m("Lento avanti seduto al Multipower"), "Smith Shoulder Press");
   assert.equal(m("Dips (Parallele)"), "Dips");
   assert.equal(m("Facepull"), "Face Pull");
-  assert.equal(matchExercise("Row presa singola", lib).id, null);   // "presa" must not match "Pressa"
+  assert.equal(nm(matchExercise("Row presa singola", lib).id), "Single-Arm Cable Row");   // not "Leg Press" via "Pressa"
+  assert.equal(matchExercise("Presa martello strana", lib).id, null);
   assert.equal(nm(matchExercise("Romanian deadlift", lib, new Set(["ex_dbrdl"])).id), "Dumbbell Romanian Deadlift"); // tie → the one you use
 });
 test("CSV / TSV paste with header and day column", () => {
@@ -103,10 +105,10 @@ test("Excel .xlsx: shared strings, inline strings, numbers, day rows", async () 
   assert.equal(r.days[0].items[1].sets[0].mins, 1);
 });
 test("build program: new exercises created once, cardio/time templates", () => {
-  const r = parseAny("DAY A\nRow presa singola 3 10 90\"\nTapis roulant 1 20 min\nRow presa singola 2 12 60\"");
+  const r = parseAny("DAY A\nEsercizio inventato 3 10 90\"\nTapis roulant 1 20 min\nEsercizio inventato 2 12 60\"");
   matchAll(r.days, null, lib, new Set());
   const { program, created } = buildProgramFromPlan(r.days, "Test", 1, libMap);
-  assert.equal(created.length, 1); assert.equal(created[0].name.it, "Row presa singola");
+  assert.equal(created.length, 1); assert.equal(created[0].name.it, "Esercizio inventato");
   const ex = program.days[0].exercises;
   assert.equal(ex[0].exId, ex[2].exId); assert.equal(ex[0].rest, 90);
   assert.equal(nm(ex[1].exId), "Treadmill"); assert.equal(ex[1].sets[0].mins, 20); assert.equal(ex[1].sets[0].rir, null);
@@ -126,4 +128,26 @@ test("no '+0 kg' suggestions: bodyweight at top of range → raise reps instead"
 test("library: cardio + time/reps tracking seeded", () => {
   assert.equal(libMap.get("ex_treadmill").track, "time"); assert.equal(libMap.get("ex_rope").track, "reps");
   assert.equal(libMap.get("ex_plank").track, "time"); assert.equal(libMap.get("ex_bench").track, "wr");
+});
+
+test("pyramid schemes from Italian and English notes", () => {
+  assert.equal(schemeOf("Piramidale"), "pyr_asc"); assert.equal(schemeOf("piramidale crescente"), "pyr_asc");
+  assert.equal(schemeOf("Piramidale inverso"), "pyr_desc"); assert.equal(schemeOf("reverse pyramid"), "pyr_desc"); assert.equal(schemeOf("piramidale discendente"), "pyr_desc");
+  assert.equal(schemeOf("Piramidale completo"), "pyr_full"); assert.equal(schemeOf("triangular pyramid"), "pyr_full");
+  assert.equal(schemeOf("drop set"), "drop"); assert.equal(schemeOf("8-10"), null);
+});
+test("AMRAP 8+ in a built program: no ceiling, to failure (RIR 0)", () => {
+  const r = parseAny("PULL\nDorso Trazioni o Lat Machine 4 Max/8 120\"\nPetto Panca piana 3 7, 8-10 (Piramidale) 120\"");
+  matchAll(r.days, null, lib, new Set());
+  const { program } = buildProgramFromPlan(r.days, "T", 1, libMap);
+  const [amrap, bench] = program.days[0].exercises;
+  assert.deepEqual(amrap.sets.map(s => [s.type, s.repsMin, s.repsMax, s.rir]), Array(4).fill(["amrap", 8, null, 0]));
+  assert.equal(bench.scheme, "pyr_asc");
+  assert.equal(fmtRange(8, null), "8+"); assert.equal(fmtRange(8, 10), "8–10"); assert.equal(fmtRange(8, 8), "8");
+});
+test("progression with no rep ceiling: up once every set beats the minimum by 4", () => {
+  const T = { repsMin: 8, repsMax: null, rir: 0 };
+  const sets = reps => reps.map(r => ({ type: "amrap", load: 60, reps: r, rir: 0, done: true, t: T }));
+  const up = suggest(sets([12, 12, 13]), 5); assert.equal(up.kind, "up"); assert.equal(up.openEnded, true); assert.deepEqual(up.loads, [65, 65, 65]);
+  const keep = suggest(sets([12, 10, 9]), 5); assert.equal(keep.kind, "reps"); assert.equal(keep.limitTarget, 12);
 });

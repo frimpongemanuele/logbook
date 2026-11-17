@@ -1,5 +1,10 @@
 // Pure training calculations. No DOM, no storage: unit-tested in tests/domain.test.mjs.
 export const isWork = (s) => s.type !== "warmup";
+/** No upper rep limit (AMRAP "8+"): load goes up once every set beats the minimum by this many reps. */
+export const OPEN_MARGIN = 4;
+export const effMax = (t) => (t.repsMax == null ? t.repsMin + OPEN_MARGIN : t.repsMax);
+/** 8–10 · 8 · 8+ */
+export const fmtRange = (min, max) => (max == null ? `${min}+` : max === min ? `${min}` : `${min}–${max}`);
 export const round2 = (n) => Math.round(n * 100) / 100;
 export function fmt(n) {
     if (n == null || isNaN(n))
@@ -51,14 +56,15 @@ export function suggest(sets, inc) {
         return adjReps(s.reps, s.rir, s.t.rir);
     });
     const loads = ws.map(s => s.load);
-    const base = { kind: "hold", loads, adj, setNo: null, limitAdj: null, limitTarget: null, harder: false, unknownEffort, inc, predicted: null, predRir: null };
-    const allTop = ws.every((s, i) => adj[i] >= s.t.repsMax);
+    const openEnded = ws.some(s => s.t.repsMax == null);
+    const base = { kind: "hold", loads, adj, setNo: null, limitAdj: null, limitTarget: null, harder: false, unknownEffort, inc, predicted: null, predRir: null, openEnded };
+    const allTop = ws.every((s, i) => adj[i] >= effMax(s.t));
     if (allTop && !(inc > 0)) {
         // nothing to add load with (bodyweight / no step): progress by raising the rep target instead
         return { ...base, kind: "reps", setNo: null, limitAdj: null, limitTarget: null, topNoLoad: true };
     }
     if (allTop) {
-        const twoSteps = ws.every((s, i) => adj[i] >= s.t.repsMax + 2);
+        const twoSteps = ws.every((s, i) => adj[i] >= effMax(s.t) + 2);
         let step = inc;
         // two increments only if predicted reps at the heavier top-set load stay in range
         const topIdx = loads.indexOf(Math.max(...loads));
@@ -78,8 +84,8 @@ export function suggest(sets, inc) {
         return i;
     };
     if (allMin) {
-        const i = pick(j => adj[j] < ws[j].t.repsMax);
-        return { ...base, kind: "reps", setNo: i + 1, limitAdj: adj[i], limitTarget: ws[i].t.repsMax };
+        const i = pick(j => adj[j] < effMax(ws[j].t));
+        return { ...base, kind: "reps", setNo: i + 1, limitAdj: adj[i], limitTarget: effMax(ws[i].t) };
     }
     const i = pick(j => adj[j] < ws[j].t.repsMin);
     const s = ws[i];

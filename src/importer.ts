@@ -38,7 +38,8 @@ const DAY_RE = /(luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sa
 const titleCase = (s: string) => s.toLowerCase().replace(/(^|[\s(\-/&])(\p{L})/gu, (_m, a, b) => a + b.toUpperCase());
 
 export function dayName(raw: string): string {
-  let s = cleanLine(raw).replace(/^#+\s*/, "").replace(/[:\-–]\s*$/, "").trim();
+  let s = cleanLine(raw).replace(/^#+\s*/, "").replace(/[:\-–]\s*$/, "").trim()
+    .replace(/(^|\s)5(?=[a-zà-ù]{3,})/gi, "$1S").replace(/(^|\s)0(?=[a-zà-ù]{3,})/gi, "$1O");
   const m = s.search(DAY_RE);
   if (m > 0 && m < 12) s = s.slice(m);                           // drop OCR junk before the day word
   s = s.replace(/\b(push|pull|legs|upper|lower|gambe)\s+8\b/gi, "$1 B").replace(/\(\s*/g, "(").replace(/\s*\)/g, ")");
@@ -46,7 +47,7 @@ export function dayName(raw: string): string {
   return s === s.toUpperCase() ? titleCase(s) : s;
 }
 
-export interface SetSpec { type: "working" | "amrap"; min: number; max: number; mins: number | null }
+export interface SetSpec { type: "working" | "amrap"; min: number; max: number | null; mins: number | null }
 /** "8-10" · "12" · "7, 8-10" · "Max/8" · "1 min" · "30 sec" → one spec per set. */
 export function parseReps(expr: string, sets: number): SetSpec[] {
   const e = expr.toLowerCase().replace(/\s+/g, " ").trim();
@@ -59,7 +60,7 @@ export function parseReps(expr: string, sets: number): SetSpec[] {
   }
   if (/max|amrap|cedimento|failure/.test(e)) {
     const k = parseInt((e.match(/(\d+)/) || [])[1] || "0", 10) || 1;
-    return Array.from({ length: n }, () => ({ type: "amrap" as const, min: k, max: k, mins: null }));
+    return Array.from({ length: n }, () => ({ type: "amrap" as const, min: k, max: null, mins: null }));   // "Max/8" = at least 8, no ceiling
   }
   const parts = e.split(/\s*[,;/]\s*/).map(p => { const m = p.match(/(\d+)(?:\s*[-–]\s*(\d+))?/); return m ? [parseInt(m[1], 10), parseInt(m[2] || m[1], 10)] : null; }).filter(Boolean) as number[][];
   if (!parts.length) return Array.from({ length: n }, () => ({ type: "working" as const, min: 8, max: 12, mins: null }));
@@ -76,8 +77,22 @@ export function parseRest(s: string): number | null {
   return null;
 }
 
+/** Set schemes written next to reps: "(Piramidale)", "piramidale inverso", "full pyramid", "drop set" … */
+export type Scheme = "straight" | "pyr_asc" | "pyr_desc" | "pyr_full" | "topback" | "drop";
+export function schemeOf(text: string): Scheme | null {
+  const s = norm(text);
+  if (/piramid|pyramid/.test(s)) {
+    if (/complet|full|triang|doppi|double/.test(s)) return "pyr_full";
+    if (/discend|decresc|invers|revers|descend/.test(s)) return "pyr_desc";
+    return "pyr_asc";                                            // "Piramidale" on its own = crescente
+  }
+  if (/drop ?set|stripping|scalar/.test(s)) return "drop";
+  if (/top ?set|back ?off/.test(s)) return "topback";
+  return null;
+}
+
 /* ------------------------------------------------------------------ plan from free text */
-export interface PlanItem { raw: string; name: string; muscle: string | null; sets: SetSpec[]; rest: number | null; load: number | null; notes: string; exId: string | null; score: number; isNew: boolean }
+export interface PlanItem { raw: string; name: string; muscle: string | null; sets: SetSpec[]; rest: number | null; load: number | null; notes: string; scheme: Scheme | null; exId: string | null; score: number; isNew: boolean }
 export interface PlanDay { name: string; items: PlanItem[] }
 
 const REST_TAIL = /\s+(\d+\s*['’:]\s*\d{1,2}"?|\d+(?:[.,]\d+)?\s*(?:"|''|s|sec|secondi|min|minuti|m|')|\d{2,3})\s*$/i;
@@ -114,8 +129,9 @@ export function parseExerciseLine(line: string): PlanItem | null {
   }
   name = words.join(" ").replace(/^[^\p{L}\d(]+/u, "").replace(/[^\p{L}\d)]+$/u, "").trim();
   if (!name || !/\p{L}{2,}/u.test(name)) return null;
-  if (/piramid|pyramid/i.test(note)) note = "Piramidale / pyramid";
-  return { raw: line.trim(), name, muscle, sets: parseReps(repsExpr, sets), rest, load: null, notes: note, exId: null, score: 0, isNew: true };
+  const scheme = schemeOf(note) || schemeOf(line);
+  if (scheme) note = "";
+  return { raw: line.trim(), name, muscle, sets: parseReps(repsExpr, sets), rest, load: null, notes: note, scheme, exId: null, score: 0, isNew: true };
 }
 
 const isDayLine = (raw: string) => {
@@ -195,9 +211,8 @@ export function parsePlanRows(rows: string[][]): PlanDay[] {
       sets: parseReps(repsTxt || (h.minutes != null && cells[h.minutes] ? cells[h.minutes] + " min" : ""), sets),
       rest: h.rest != null ? parseRest(cells[h.rest]) : null,
       load: h.load != null && cells[h.load] ? parseFloat(cells[h.load].replace(",", ".")) || null : null,
-      notes: h.notes != null ? cells[h.notes] : "", exId: null, score: 0, isNew: true,
+      notes: h.notes != null ? cells[h.notes] : "", scheme: schemeOf(repsTxt) || (h.notes != null ? schemeOf(cells[h.notes] || "") : null), exId: null, score: 0, isNew: true,
     };
-    if (/piramid|pyramid/i.test(repsTxt)) item.notes = (item.notes ? item.notes + " · " : "") + "Piramidale / pyramid";
     let target = cur;
     if (h.day != null && cells[h.day]) {
       const dn = dayName(cells[h.day]);
@@ -378,10 +393,10 @@ export function buildProgramFromPlan(days: PlanDay[], name: string, now: number,
         const ex = lib.get(exId!) || createdByName.get(norm(it.name));
         const tr = ex?.track || "wr";
         return {
-          id: uid(), exId, group: null, optional: false, rest: it.rest, notes: it.notes || "",
+          id: uid(), exId, group: null, optional: false, rest: it.rest, notes: it.notes || "", scheme: it.scheme || "straight",
           sets: it.sets.map(s => tr === "time"
             ? { id: uid(), type: "working", load: null, repsMin: 0, repsMax: 0, rir: null, mins: s.mins ?? 1 }
-            : { id: uid(), type: s.type, load: it.load, repsMin: s.min, repsMax: s.max, rir: tr === "wr" ? 2 : null }),
+            : { id: uid(), type: s.type, load: it.load, repsMin: s.min, repsMax: s.max, rir: tr === "wr" ? (s.type === "amrap" ? 0 : 2) : null }),
         };
       }),
     })),

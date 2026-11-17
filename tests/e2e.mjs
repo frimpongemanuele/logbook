@@ -215,10 +215,11 @@ try {
   await ctx.setOffline(false);
   // ---- import: pasted plan
   await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="lang"][data-v="en"]'); await page.click('[data-a="openImport"]');
-  await page.fill('[data-in="impText"]', "LUNEDÌ (PUSH A)\nPetto Panca piana bilanciere 3 7, 8-10 (Piramidale) 120\"\nSpalle Alzate laterali ai cavi 4 12-15 60\"\nGIOVEDÌ (GAMBE & CORE)\nGambe Leg press 4 8-10 120\"\nDorso Row presa singola 3 10 90\"\nCore Plank 3 1 min 60\"");
+  await page.fill('[data-in="impText"]', "LUNEDÌ (PUSH A)\nPetto Panca piana bilanciere 3 7, 8-10 (Piramidale) 120\"\nSpalle Alzate laterali ai cavi 4 12-15 60\"\nGIOVEDÌ (GAMBE & CORE)\nGambe Leg press 4 8-10 120\"\nDorso Row presa singola 3 10 90\"\nDorso Trazioni o Lat Machine 4 Max/8 120\"\nDorso Esercizio inventato 3 10 90\"\nCore Plank 3 1 min 60\"");
   await page.click('[data-a="impReadText"]'); await page.waitForSelector(".improw");
   const imp = await page.textContent(".scroll");
-  ok("Paste import preview: 2 days, matches + 1 new", (await page.$$(".dayinp")).length === 2 && imp.includes("Bench Press") && imp.includes("Cable Lateral Raise") && imp.includes("New: Row presa singola") && imp.includes("3 × 1 min"));
+  ok("Paste import preview: 2 days, matches + 1 new", (await page.$$(".dayinp")).length === 2 && imp.includes("Bench Press") && imp.includes("Cable Lateral Raise") && imp.includes("Single-Arm Cable Row") && imp.includes("New: Esercizio inventato") && imp.includes("3 × 1 min"));
+  ok("Preview: pyramid scheme and AMRAP 8+", imp.includes("Pyramid ↑") && imp.includes("4 × AMRAP 8+"));
   await shot("15-import-preview");
   await page.click('[data-a="impEdit"][data-v="1"][data-i="0"]'); await page.fill("#sheetText", "4 x 6-8 150s"); await page.click('[data-a="textOk"]'); await page.waitForTimeout(150);
   ok("Edit sets in preview", (await page.textContent('[data-a="impEdit"][data-v="1"][data-i="0"]')).includes("4 × 6–8 · 150"));
@@ -226,6 +227,18 @@ try {
   ok("Program created from import and active", (await page.inputValue("#pname")) === "Scheda novembre" && (await page.textContent(".toast")).includes("1 new"));
   await page.click('[data-a="tab"][data-v="today"]');
   ok("Today now shows the imported plan's first day", (await page.textContent("h1")).includes("Lunedì"));
+  await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]:has-text("Scheda novembre")'); await page.click('[data-a="openDay"][data-v="1"]');
+  ok("Day shows 8+ and pyramid", (await page.textContent(".scroll")).includes("8+@0"));
+  await page.locator('[data-a="openPe"]').nth(2).click();
+  ok("AMRAP sets: max reps shows ∞ (no limit)", (await page.$$eval('[data-f="repsMax"]', els => els.map(e => e.textContent.trim()))).every(x => x === "∞"));
+  await shot("16-amrap-template");
+  await page.click('[data-a="back"]'); await page.click('[data-a="back"]'); await page.click('[data-a="openDay"][data-v="0"]'); await page.locator('[data-a="openPe"]').nth(0).click();
+  ok("Pyramid scheme selected in the editor", (await page.inputValue('select[data-in="peScheme"]')) === "pyr_asc");
+  await shot("17-scheme");
+  await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="lang"][data-v="it"]'); await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]:has-text("Scheda novembre")'); await page.click('[data-a="openDay"][data-v="0"]'); await page.locator('[data-a="openPe"]').nth(0).click();
+  await page.click('[data-a="tplType"]'); 
+  ok("Italian set types: English term + Italian in brackets", (await page.textContent(".menu")).includes("AMRAP (cedimento)") && (await page.textContent(".menu")).includes("Drop set (stripping)"));
+  await page.click('[data-a="scrim"]', { position: { x: 10, y: 10 } }); await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="lang"][data-v="en"]'); await page.click('[data-a="tab"][data-v="today"]');
   // ---- import: Excel file
   if (fs.existsSync(XLSX)) {
     await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="openImport"]');
