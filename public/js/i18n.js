@@ -1,4 +1,5 @@
 const en = {
+    planLbl: "plan",
     activate: "Activate", deleteProgram: "Delete program", deleteProgramQ: "Delete “{x}”?", deleteProgramBody: "Your workouts in History stay. You can undo, or restore it later from More.",
     progDeleted: "Program deleted", progArchived: "Program archived", progActive: "“{x}” is now active", deletedPrograms: "Deleted programs", open: "Open",
     progTip: "Swipe a program left for quick actions, or long-press it for all options", unilateral: "Unilateral", perSide: "per side",
@@ -84,6 +85,7 @@ const en = {
     saved: "Saved", sec: "s", restOn: "rest", added: "added", workoutStarted: "Workout started",
 };
 const it = {
+    planLbl: "piano",
     activate: "Attiva", deleteProgram: "Elimina scheda", deleteProgramQ: "Eliminare “{x}”?", deleteProgramBody: "Gli allenamenti nello Storico restano. Puoi annullare o ripristinarla dopo da Altro.",
     progDeleted: "Scheda eliminata", progArchived: "Scheda archiviata", progActive: "“{x}” ora è attiva", deletedPrograms: "Schede eliminate", open: "Apri",
     progTip: "Scorri una scheda a sinistra per le azioni rapide, o tienila premuta per tutte le opzioni", unilateral: "Unilaterale", perSide: "per lato",

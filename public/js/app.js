@@ -5,7 +5,7 @@ import { seedExercises, MUSCLES } from "./seed.js";
 import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2, fmtRange, OPEN_MARGIN } from "./domain.js";
 import { setsCsv, mergeImport } from "./data.js";
 import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine, dayName } from "./importer.js";
-export const VERSION = "0.8.0";
+export const VERSION = "0.8.1";
 const DAY = 86400000;
 const A = {
     lib: new Map(), programs: [], sessions: [],
@@ -423,7 +423,10 @@ function vToday() {
     h += `<h2>${t("lastTime")}</h2><div class="card">` + day.exercises.map((pe) => {
         const lp = lastPerf(pe.exId);
         const ex = exById(pe.exId);
-        const txt = lp ? lp.work.map((y) => setTxt(ex, y)).join(" · ") : "—";
+        // no ticked sets in History yet → show the plan instead of a dash
+        const plan = pe.sets.filter(isWork).map((tp) => (ex?.track || "wr") === "time" ? `${fmt(tp.mins ?? 0)} min`
+            : `${tp.load != null && (ex?.track || "wr") === "wr" ? loadTxt(ex, tp.load) + "×" : "×"}${fmtRange(tp.repsMin, tp.repsMax)}`).join(" · ");
+        const txt = lp ? lp.work.map((y) => setTxt(ex, y)).join(" · ") : plan ? `<span class="faint">${t("planLbl")}: ${plan}</span>` : "—";
         return `<div class="li"><span>${esc(exName(pe.exId))}${pe.optional ? ` <span class="faint">(${t("optional")})</span>` : ""}${pe.group ? ` <span class="pill">${esc(pe.group)}</span>` : ""}</span><span class="muted num small r">${txt}</span></div>`;
     }).join("") + `</div></div>`;
     return h;

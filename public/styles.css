@@ -227,3 +227,6 @@ button,.tabbar,.strip,.set,.badge{-webkit-user-select:none;user-select:none}
 .libcard .li{padding:11px 14px;border-bottom:0}
 .swipe{background:transparent}
 
+/* v0.8.1: opaque fixed strip at the top edge → iOS 26 uses its colour for the status bar instead of blurring the header */
+#topedge{position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top,0px) + 6px);background:var(--bg);z-index:15;pointer-events:auto}
+.wk-head,.hdr{background:var(--bg)}
