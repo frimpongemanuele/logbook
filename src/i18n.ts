@@ -2,6 +2,11 @@
 export type Lang = "en" | "it";
 
 const en: Record<string, string> = {
+  swipeTip: "Swipe a workout left to delete it", swipeTipEx: "Swipe an exercise left to delete it", workoutDeleted: "Workout deleted",
+  deleteForever: "Delete permanently", cantUndo: "This can't be undone.", deletedEx: "Deleted exercises", exRestored: "Exercise restored",
+  deleteExercise: "Delete exercise", exDeleted: "{x} deleted", deleteExQ: "Delete {x}?",
+  deleteExUsed: "It's in {n} place(s) in your programs and will be removed there. Past workouts keep it. You can undo or restore it from More.",
+  nothingLogged: "Nothing logged", nothingLoggedBody: "No sets are ticked, so there is nothing to save. Discard this workout? (You can restore it from More.)",
   minutes: "Minutes", cardio: "Cardio", tracking: "Tracking", tr_wr: "Weight × reps", tr_reps: "Reps only", tr_time: "Time (minutes)", m_cardio: "Cardio",
   whyTopNoLoad: "Every set reached the top of its range. There is no load to add, so raise the rep target by 1–2 next time.",
   needTwo: "Log this exercise at least twice to see a trend.", sinceFirst: "over {n} sessions", progressT: "Progress",
@@ -74,6 +79,11 @@ const en: Record<string, string> = {
 };
 
 const it: Record<string, string> = {
+  swipeTip: "Scorri un allenamento a sinistra per eliminarlo", swipeTipEx: "Scorri un esercizio a sinistra per eliminarlo", workoutDeleted: "Allenamento eliminato",
+  deleteForever: "Elimina definitivamente", cantUndo: "Non si può annullare.", deletedEx: "Esercizi eliminati", exRestored: "Esercizio ripristinato",
+  deleteExercise: "Elimina esercizio", exDeleted: "{x} eliminato", deleteExQ: "Eliminare {x}?",
+  deleteExUsed: "È presente in {n} punto/i delle tue schede e verrà rimosso. Gli allenamenti passati lo mantengono. Puoi annullare o ripristinarlo da Altro.",
+  nothingLogged: "Niente registrato", nothingLoggedBody: "Nessuna serie spuntata, quindi non c'è nulla da salvare. Scartare l'allenamento? (Puoi ripristinarlo da Altro.)",
   minutes: "Minuti", cardio: "Cardio", tracking: "Registrazione", tr_wr: "Peso × ripetizioni", tr_reps: "Solo ripetizioni", tr_time: "Tempo (minuti)", m_cardio: "Cardio",
   whyTopNoLoad: "Tutte le serie hanno raggiunto il massimo dell'intervallo. Non c'è carico da aggiungere: la prossima volta alza l'obiettivo di 1–2 ripetizioni.",
   needTwo: "Registra questo esercizio almeno due volte per vedere l'andamento.", sinceFirst: "in {n} sessioni", progressT: "Progressi",

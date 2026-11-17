@@ -1,2 +1,2 @@
-{ "name": "logbook", "version": "0.5.0", "private": true, "type": "module",
+{ "name": "logbook", "version": "0.6.0", "private": true, "type": "module",
   "scripts": { "build": "tsc -p .", "test": "node --test tests/" } }

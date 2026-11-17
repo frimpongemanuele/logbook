@@ -5,7 +5,7 @@ import { seedExercises, MUSCLES } from "./seed.js";
 import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2 } from "./domain.js";
 import { setsCsv, mergeImport } from "./data.js";
 import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine } from "./importer.js";
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 const DAY = 86400000;
 const A = {
     lib: new Map(), programs: [], sessions: [],
@@ -249,6 +249,8 @@ const I = {
     list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" width="20" height="20"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true" width="20" height="20"><path d="M12 5v14M5 12h14"/></svg>',
 };
+/** A row you can swipe left to reveal Delete (full swipe deletes straight away). */
+const swipeRow = (inner, delAttrs) => `<div class="swipe"><button class="swipe-del" ${delAttrs}>${t("delete")}</button><div class="swipe-in">${inner}</div></div>`;
 const header = (title, right = "") => `<header class="hdr"><button class="iconbtn" data-a="back" aria-label="${t("back")}">${I.back}</button><div class="hdr-t">${esc(title)}</div><div class="hdr-r">${right}</div></header>`;
 /* ---------------- theme ---------------- */
 const darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -256,9 +258,7 @@ function applyTheme() {
     const pref = A.settings.theme || "system";
     const resolved = pref === "system" ? (darkMq && darkMq.matches ? "dark" : "light") : pref;
     document.documentElement.dataset.theme = resolved;
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta)
-        meta.setAttribute("content", resolved === "dark" ? "#0f1012" : "#f4f4f2");
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute("content", resolved === "dark" ? "#0f1012" : "#f4f4f2"));
 }
 if (darkMq) {
     const onChange = () => { if ((A.settings.theme || "system") === "system")
@@ -611,8 +611,10 @@ function vHistory() {
         h += `<p class="sub">${t("noSessions")}</p>`;
     h += list.map((s) => {
         const st = sessionStats(s);
-        return `<button class="card rowbtn" data-a="openSession" data-id="${s.id}"><span><b>${esc(nm(s.dayName))}</b><span class="sub block">${sessionDate(s)}${s.dateUnknown ? "" : " · " + clock(elapsed(s))}</span></span><span class="muted num small r">${st.sets} ${t("sets").toLowerCase()}<br>${Math.round(st.vol).toLocaleString(locale())} kg</span></button>`;
+        return swipeRow(`<button class="card rowbtn" data-a="openSession" data-id="${s.id}"><span><b>${esc(nm(s.dayName))}</b><span class="sub block">${sessionDate(s)}${s.dateUnknown ? "" : " · " + clock(elapsed(s))}</span></span><span class="muted num small r">${st.sets} ${t("sets").toLowerCase()}<br>${Math.round(st.vol).toLocaleString(locale())} kg</span></button>`, `data-a="swipeDelSession" data-id="${s.id}"`);
     }).join("");
+    if (list.length)
+        h += `<p class="faint small c">${t("swipeTip")}</p>`;
     return h + `</div>`;
 }
 function vSession(p) {
@@ -725,9 +727,10 @@ function libList(mode, ctx) {
         .filter((e) => !q || [e.name.en, e.name.it, ...(e.aliases || [])].some((n) => n.toLowerCase().includes(q)))
         .sort((a, b) => nm(a.name).localeCompare(nm(b.name), locale()));
     const chips = `<div class="chips-row">${["", ...MUSCLES].map(m => `<button class="chipf ${A.qm === m ? "on" : ""}" data-a="libMuscle" data-v="${m}">${m ? t("m_" + m) : t("all")}</button>`).join("")}</div>`;
-    const items = list.map((e) => `<button class="li btnli" data-a="${mode}" data-id="${e.id}" ${ctx ? `data-ctx='${esc(JSON.stringify(ctx))}'` : ""}>
-      <span><span class="b">${esc(nm(e.name))}</span>${e.custom ? ` <span class="pill">${t("custom")}</span>` : ""}<span class="sub block small">${t("eq_" + e.equipment)} · ${e.muscles.filter((m) => m.role === "primary").map((m) => t("m_" + m.m)).join(", ")}</span></span>${I.chev}</button>`).join("");
-    return `<input class="inp search" type="search" placeholder="${t("search")}" value="${esc(A.q)}" data-in="libQ" autocomplete="off">${chips}<div class="card">${items || `<p class="sub">—</p>`}</div>`;
+    const row = (e) => `<button class="li btnli" data-a="${mode}" data-id="${e.id}" ${ctx ? `data-ctx='${esc(JSON.stringify(ctx))}'` : ""}>
+      <span><span class="b">${esc(nm(e.name))}</span>${e.custom ? ` <span class="pill">${t("custom")}</span>` : ""}<span class="sub block small">${t("eq_" + e.equipment)} · ${e.muscles.filter((m) => m.role === "primary").map((m) => t("m_" + m.m)).join(", ")}</span></span>${I.chev}</button>`;
+    const items = list.map((e) => (mode === "openExercise" ? swipeRow(row(e), `data-a="swipeDelEx" data-id="${e.id}"`) : row(e))).join("");
+    return `<input class="inp search" type="search" placeholder="${t("search")}" value="${esc(A.q)}" data-in="libQ" autocomplete="off">${chips}<div class="card libcard">${items || `<p class="sub">—</p>`}</div>${mode === "openExercise" && list.length ? `<p class="faint small c">${t("swipeTipEx")}</p>` : ""}`;
 }
 function vLibrary() {
     return `<div class="scroll"><div class="row spread"><h1>${t("library")}</h1><button class="btn ghost small" data-a="newExercise">+ ${t("newExercise")}</button></div>${libList("openExercise", null)}</div>`;
@@ -769,7 +772,7 @@ function lineChart(pts, m) {
     const line = pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
     const area = `${X(0).toFixed(1)},${H - B} ${line} ${X(pts.length - 1).toFixed(1)},${H - B}`;
     const u = metricUnit(m), r = (v) => (m === "e1rm" || m === "vol" ? Math.round(v) : fmt(v));
-    const lbl = (p) => (p.s.dateUnknown ? "?" : dstr(p.s.startedAt, { day: "numeric", month: "short" }));
+    const lbl = (p) => (p.s.dateUnknown ? "" : dstr(p.s.startedAt, { day: "numeric", month: "short" }));
     return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${pts.map(p => r(p.v)).join(", ")} ${u}">
     <line x1="${L}" x2="${W - R}" y1="${Y(mx)}" y2="${Y(mx)}" class="grid"/><line x1="${L}" x2="${W - R}" y1="${Y(mn)}" y2="${Y(mn)}" class="grid"/>
     <polygon points="${area}" fill="var(--accent)" opacity=".12"/>
@@ -850,7 +853,7 @@ function vExForm(p) {
     <div class="lbl">${t("secondary")}</div><div class="chips-row wrap">${MUSCLES.filter(m => m !== prim).map(m => `<button class="chipf ${sec.has(m) ? "on" : ""}" data-a="fSec" data-v="${m}">${t("m_" + m)}</button>`).join("")}</div>
     <div class="row g8 mt12"><div class="flex1"><div class="lbl">${t("increment")}</div><input class="inp num" inputmode="decimal" value="${fmt(f.inc)}" data-in="fInc"></div><div class="flex1"><div class="lbl">${t("restSec")}</div><input class="inp num" inputmode="numeric" value="${f.rest}" data-in="fRest"></div></div>
     <button class="btn primary block mt16" data-a="fSave">${t("save")}</button>
-    ${ex ? `<button class="btn ghost block mt8 danger" data-a="exArchive" data-id="${ex.id}">${t("archiveEx")}</button>` : ""}
+    ${ex ? `<button class="btn ghost block mt8 danger" data-a="exArchive" data-id="${ex.id}">${t("deleteExercise")}</button>` : ""}
   </div>`;
 }
 /* ---------------- Import ---------------- */
@@ -1031,6 +1034,7 @@ async function ocrImage(file, progress) {
 function vMore() {
     const disc = A.sessions.filter((s) => s.status === "discarded").sort((a, b) => b.startedAt - a.startedAt);
     const lb = A.settings.lastBackupAt, due = backupDue();
+    const delEx = [...A.lib.values()].filter((e) => e.archived).sort((a, b) => nm(a.name).localeCompare(nm(b.name), locale()));
     return `<div class="scroll"><h1>${t("more")}</h1>
     <div class="card ${due ? "duecard" : ""}"><div class="row g8"><span class="flex1"><b>${t("backupShort")}</b><span class="sub small block">${t("lastBackup", { d: lb ? dstr(lb) : t("never") })}${due ? " · " + t("backupDueShort") : ""}</span></span>
       <button class="btn ${due ? "primary" : "ghost"} small" data-a="exportJson">${t("backupNow")}</button></div><p class="sub small mt8">${t("backupHelp")}</p></div>
@@ -1041,7 +1045,8 @@ function vMore() {
     <h2>${t("data")}</h2>
     <button class="btn ghost block" data-a="exportCsv">${t("exportCsv")}</button>
     <label class="btn ghost block mt8 filebtn">${t("importJson")}<input type="file" accept=".json,.csv,.tsv,.txt,.md,.xlsx,image/*,text/*,application/json" data-in="impFile" hidden></label>
-    ${disc.length ? `<h2>${t("discarded")}</h2><div class="card">${disc.map((s) => `<div class="li"><span>${esc(nm(s.dayName))}<span class="sub block small">${sessionDate(s)}</span></span><button class="btn ghost small" data-a="restoreSession" data-id="${s.id}">${t("restore")}</button></div>`).join("")}</div>` : ""}
+    ${disc.length ? `<h2>${t("discarded")}</h2><div class="card">${disc.map((s) => `<div class="li"><span class="flex1">${esc(nm(s.dayName))}<span class="sub block small">${sessionDate(s)} · ${sessionStats(s).sets} ${t("sets").toLowerCase()}</span></span><button class="btn ghost small" data-a="restoreSession" data-id="${s.id}">${t("restore")}</button><button class="iconbtn danger" data-a="purgeSession" data-id="${s.id}" aria-label="${t("deleteForever")}">${I.x}</button></div>`).join("")}</div>` : ""}
+    ${delEx.length ? `<h2>${t("deletedEx")}</h2><div class="card">${delEx.map((e) => `<div class="li"><span>${esc(nm(e.name))}</span><button class="btn ghost small" data-a="restoreEx" data-id="${e.id}">${t("restore")}</button></div>`).join("")}</div>` : ""}
     <h2>${t("storage")}</h2><div class="card"><div class="sub">${A.persisted ? t("persisted") : t("notPersisted")}</div><div class="sub mt8">${t("installHint")}</div></div>
     <p class="faint small c mt16">Logbook ${VERSION}</p></div>`;
 }
@@ -1728,10 +1733,40 @@ app.addEventListener("click", async (ev) => {
                 A.form = null;
                 go("exform", {});
                 return;
-            case "exEdit":
-                A.form = null;
-                go("exform", { id: d.id });
+            case "exEdit": {
+                const ex = exById(d.id);
+                menu(nm(ex.name), [{ label: t("edit"), on: () => { A.form = null; go("exform", { id: ex.id }); } }, { label: t("deleteExercise"), danger: true, on: () => deleteExercise(ex, true) }]);
                 return;
+            }
+            case "swipeDelEx": {
+                closeSwipes();
+                await deleteExercise(exById(d.id), false);
+                break;
+            }
+            case "swipeDelSession": {
+                closeSwipes();
+                const ss = A.sessions.find((x) => x.id === d.id);
+                if (!ss)
+                    break;
+                ss.status = "discarded";
+                ss.discardedAt = now();
+                await saveSession(ss);
+                toast(t("workoutDeleted"), async () => { ss.status = "completed"; await saveSession(ss); });
+                break;
+            }
+            case "purgeSession": {
+                const ss = A.sessions.find((x) => x.id === d.id);
+                confirmSheet(t("deleteForever"), `${nm(ss.dayName)} · ${sessionDate(ss)}. ${t("cantUndo")}`, t("delete"), true, async () => { await db.del("sessions", ss.id); A.sessions = A.sessions.filter((x) => x !== ss); });
+                return;
+            }
+            case "restoreEx": {
+                const ex = exById(d.id);
+                ex.archived = false;
+                delete ex.deletedAt;
+                await saveExercise(ex);
+                toast(t("exRestored"));
+                break;
+            }
             case "exInc": {
                 const ex = exById(d.id);
                 numSheet(t("increment"), ex.inc, { step: 0.5, decimal: true, unit: "kg" }, async (n) => { ex.inc = n; await saveExercise(ex); });
@@ -1743,11 +1778,8 @@ app.addEventListener("click", async (ev) => {
                 return;
             }
             case "exArchive": {
-                const ex = exById(d.id);
-                ex.archived = true;
-                await saveExercise(ex);
-                A.nav = [{ v: "library", p: {} }];
-                break;
+                await deleteExercise(exById(d.id), true);
+                return;
             }
             case "fSec": {
                 const f = A.form;
@@ -1788,10 +1820,53 @@ app.addEventListener("click", async (ev) => {
 });
 function askFinish(s) {
     const n = s.exercises.reduce((acc, e) => acc + e.sets.filter((x) => x.done && isWork(x)).length, 0);
+    if (n === 0) {
+        confirmSheet(t("nothingLogged"), t("nothingLoggedBody"), t("discard"), true, async () => { s.status = "discarded"; s.discardedAt = now(); await saveSession(s); releaseWake(); A.nav = [{ v: "today", p: {} }]; });
+        return;
+    }
     confirmSheet(t("confirmFinish"), t("confirmFinishBody", { n }), t("finish"), false, async () => { await finishSession(s); });
 }
 function askDiscard(s) {
     confirmSheet(t("confirmDiscard"), t("confirmDiscardBody"), t("discard"), true, async () => { s.status = "discarded"; s.discardedAt = now(); await saveSession(s); releaseWake(); A.nav = [{ v: "today", p: {} }]; });
+}
+/** Delete from the library: hidden everywhere and removed from programs; past workouts keep it. Undo / restore in More. */
+async function deleteExercise(ex, fromDetail) {
+    if (!ex)
+        return;
+    const uses = [];
+    for (const p of A.programs)
+        for (const d of p.days)
+            d.exercises.forEach((pe, i) => { if (pe.exId === ex.id)
+                uses.push({ p, d, i, pe }); });
+    const doIt = async () => {
+        ex.archived = true;
+        ex.deletedAt = now();
+        await saveExercise(ex);
+        const touched = new Set();
+        for (const u of [...uses].reverse()) {
+            u.d.exercises.splice(u.i, 1);
+            touched.add(u.p);
+        }
+        for (const p of touched)
+            await saveProgram(p);
+        if (fromDetail)
+            A.nav = [{ v: "library", p: {} }];
+        toast(t("exDeleted", { x: nm(ex.name) }), async () => {
+            ex.archived = false;
+            delete ex.deletedAt;
+            await saveExercise(ex);
+            for (const u of uses)
+                u.d.exercises.splice(u.i, 0, u.pe);
+            for (const p of touched)
+                await saveProgram(p);
+        });
+    };
+    if (uses.length)
+        confirmSheet(t("deleteExQ", { x: nm(ex.name) }), t("deleteExUsed", { n: uses.length }), t("delete"), true, doIt);
+    else {
+        await doIt();
+        render();
+    }
 }
 const moveItem = (arr, from, to) => { const [x] = arr.splice(from, 1); arr.splice(to, 0, x); };
 /** Apply a drag (or menu) reorder to the list a .sortable element describes. */
@@ -2000,6 +2075,86 @@ app.addEventListener("change", async (ev) => {
         render();
     }
 });
+/* swipe-to-delete rows (pointer events; vertical scrolling stays native via touch-action: pan-y) */
+let sw = null, swipeBlockUntil = 0;
+const SW_OPEN = 92;
+function closeSwipes(except) { app.querySelectorAll(".swipe.open").forEach(r => { if (r !== except) {
+    r.classList.remove("open");
+    r.querySelector(".swipe-in").style.transform = "";
+} }); }
+app.addEventListener("pointerdown", ev => {
+    const inn = ev.target.closest(".swipe-in");
+    if (!inn) {
+        if (!ev.target.closest(".swipe-del") && app.querySelector(".swipe.open")) {
+            closeSwipes();
+            swipeBlockUntil = Date.now() + 350;
+        }
+        return;
+    }
+    const row = inn.parentElement;
+    if (app.querySelector(".swipe.open") && !row.classList.contains("open")) {
+        closeSwipes();
+        swipeBlockUntil = Date.now() + 350;
+    }
+    sw = { inn, row, x0: ev.clientX, y0: ev.clientY, base: row.classList.contains("open") ? -SW_OPEN : 0, dir: "", x: 0, pid: ev.pointerId, w: row.getBoundingClientRect().width };
+});
+app.addEventListener("pointermove", ev => {
+    if (!sw || ev.pointerId !== sw.pid)
+        return;
+    const dx = ev.clientX - sw.x0, dy = ev.clientY - sw.y0;
+    if (!sw.dir) {
+        if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+            sw.dir = "h";
+            try {
+                sw.inn.setPointerCapture(sw.pid);
+            }
+            catch { }
+            sw.row.classList.add("swiping");
+        }
+        else if (Math.abs(dy) > 8) {
+            sw = null;
+            return;
+        }
+        else
+            return;
+    }
+    sw.x = Math.max(-sw.w * 0.95, Math.min(0, sw.base + dx));
+    sw.inn.style.transform = `translateX(${sw.x}px)`;
+    sw.row.classList.toggle("full", sw.x < -sw.w * 0.6);
+});
+const endSwipe = (ev) => {
+    if (!sw || ev.pointerId !== sw.pid)
+        return;
+    const g = sw;
+    sw = null;
+    if (g.dir !== "h")
+        return;
+    swipeBlockUntil = Date.now() + 350;
+    g.row.classList.remove("swiping");
+    if (g.x < -g.w * 0.6) {
+        haptic();
+        g.row.querySelector(".swipe-del").click();
+        return;
+    } // full swipe = delete
+    const open = g.x < -SW_OPEN / 2;
+    g.row.classList.toggle("open", open);
+    g.row.classList.remove("full");
+    g.inn.style.transform = open ? `translateX(${-SW_OPEN}px)` : "";
+    if (open) {
+        closeSwipes(g.row);
+        haptic();
+    }
+};
+app.addEventListener("pointerup", endSwipe);
+app.addEventListener("pointercancel", endSwipe);
+// a click right after a swipe (or tapping away from an open row) must not open the row
+app.addEventListener("click", ev => { if (Date.now() < swipeBlockUntil && !ev.target.closest(".swipe-del")) {
+    ev.stopPropagation();
+    ev.preventDefault();
+} }, true);
+// behave like an app: no double-tap or pinch zoom
+document.addEventListener("gesturestart", e => e.preventDefault());
+document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
 /* drag to reorder: grab the handle, move, release */
 let drag = null;
 app.addEventListener("pointerdown", ev => {

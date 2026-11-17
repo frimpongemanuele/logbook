@@ -146,8 +146,43 @@ try {
   await page.click('[data-a="histM"][data-v="e1rm"]'); await page.waitForTimeout(150);
   ok("Bench e1RM trend: +7 kg (110.5 → 117)", (await page.textContent(".delta")).includes("+7 kg"));
   await shot("10b-history-chart");
+  // swipe to delete (pointer drag), undo, full swipe, no accidental open
+  const swipe = async (sel, dx) => { const b = await page.locator(sel).first().boundingBox(); const y = b.y + b.height / 2, x = b.x + b.width - 20;
+    await page.mouse.move(x, y); await page.mouse.down(); for (let k = 1; k <= 10; k++) { await page.mouse.move(x + dx * k / 10, y + 1); await page.waitForTimeout(16); } await page.mouse.up(); await page.waitForTimeout(300); };
+  const nRows = async () => (await page.$$('.swipe [data-a="openSession"]')).length;
+  const rows0 = await nRows();
+  await swipe(".swipe-in", -140);
+  ok("Swipe left reveals Delete (row not opened)", !!(await page.$(".swipe.open")) && (await page.$("h1")) && (await page.textContent("h1")) === "History");
+  await shot("11a-swipe-open");
+  await page.click(".swipe.open .swipe-del"); await page.waitForTimeout(250);
+  ok("Delete removes the workout", (await nRows()) === rows0 - 1 && (await page.textContent(".toast")).includes("Workout deleted"));
+  await page.click('[data-a="undo"]'); await page.waitForTimeout(250);
+  ok("Undo brings it back", (await nRows()) === rows0);
+  await swipe(".swipe-in", -330); await page.waitForTimeout(250);
+  ok("Full swipe deletes straight away", (await nRows()) === rows0 - 1);
+  await page.click('[data-a="undo"]'); await page.waitForTimeout(250);
+  await swipe(".swipe-in", -140); await page.click("h1"); await page.waitForTimeout(400);
+  ok("Tapping elsewhere closes the open row", !(await page.$(".swipe.open")));
   await page.click('[data-a="openSession"]'); await shot("11-session");
   // library + exercise detail
+  // delete exercises: unused one by swipe; used one from its page (removed from programs, undo restores)
+  await page.click('[data-a="tab"][data-v="library"]'); await page.fill(".search", "plank"); await page.waitForTimeout(150);
+  await swipe(".libcard .swipe-in", -140); await page.click(".swipe.open .swipe-del"); await page.waitForTimeout(250);
+  ok("Swipe-delete an unused exercise", !(await page.$('.libcard [data-a="openExercise"]')));
+  await page.fill(".search", "triceps pushdown"); await page.waitForTimeout(150);
+  await page.click('[data-a="openExercise"]'); await page.click('[data-a="exEdit"]'); await page.click('.menu .danger');
+  ok("Deleting a used exercise asks first (in your programs)", (await page.textContent(".sheet")).includes("in 1 place"));
+  await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
+  ok("Deleted exercise leaves the library", (await page.textContent("h1")) === "Library" && !(await page.$('[data-a="openExercise"]')));
+  await page.click('[data-a="undo"]'); await page.waitForTimeout(250);
+  await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]'); await page.click('[data-a="openDay"][data-v="0"]');
+  ok("Undo puts it back in the program day", (await page.textContent(".scroll")).includes("Triceps Pushdown"));
+  await page.click('[data-a="tab"][data-v="more"]');
+  ok("More lists deleted exercises with Restore", (await page.textContent(".scroll")).includes("Deleted exercises") && (await page.textContent(".scroll")).includes("Plank"));
+  await page.click('[data-a="restoreEx"]'); await page.waitForTimeout(200);
+  ok("Restore deleted exercise", !(await page.textContent(".scroll")).includes("Deleted exercises"));
+  ok("No zoom: viewport locked + touch-action manipulation", (await page.getAttribute('meta[name="viewport"]', "content")).includes("user-scalable=no") && (await page.evaluate(() => getComputedStyle(document.documentElement).touchAction)) === "manipulation");
+  ok("Status bar not translucent (no iOS edge blur over the app)", (await page.getAttribute('meta[name="apple-mobile-web-app-status-bar-style"]', "content")) === "default");
   await page.click('[data-a="tab"][data-v="library"]'); await page.fill(".search", "panca piana"); 
   ok("Search finds Italian name", (await page.textContent(".card")).includes("Bench Press"));
   await page.click('[data-a="openExercise"]'); await page.waitForSelector(".chart");
@@ -212,6 +247,10 @@ try {
   // light theme screenshot of workout
   await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="theme"][data-v="light"]'); await page.click('[data-a="tab"][data-v="today"]');
   await page.click('[data-a="start"]'); await page.waitForSelector(".ex-name"); await shot("14-workout-light-it");
+  await page.click('[data-a="askFinish"]'); await page.waitForSelector(".sheet");
+  ok("Finishing with nothing ticked offers to discard", /Niente registrato|Nothing logged/.test(await page.textContent(".sheet")));
+  await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
+  ok("Empty workout discarded, not saved to History", !(await page.$(".bar-card.hot")));
 } catch (e) { results.push(["FAIL", "exception: " + e.message.split("\n")[0]]); await shot("zz-error"); }
 const real = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|ERR_INTERNET_DISCONNECTED|Error: offline/.test(e));
 ok("No page errors (besides the expected offline OCR download)", real.length === 0); if (real.length) console.log(real);

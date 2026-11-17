@@ -210,3 +210,18 @@ html[data-theme="light"] .toast button{color:#ffb27a}
 .errline{color:var(--danger);font-weight:600}
 .mb8{margin-bottom:8px}
 .impsets{white-space:normal;height:auto;min-height:40px;line-height:1.25;padding:6px 10px;max-width:46%;text-align:center}
+/* v0.6: app-like touch, swipe-to-delete */
+html{touch-action:manipulation;-webkit-touch-callout:none}
+button,.tabbar,.strip,.set,.badge{-webkit-user-select:none;user-select:none}
+.swipe{position:relative;overflow:hidden;border-radius:var(--r);margin-bottom:10px;background:var(--danger)}
+.swipe .card{margin-bottom:0;border-radius:0}
+.swipe-in{position:relative;background:var(--surface);touch-action:pan-y;transition:transform .2s ease;will-change:transform}
+.swipe.swiping .swipe-in{transition:none}
+.swipe-del{position:absolute;top:0;right:0;bottom:0;width:92px;color:#fff;font-weight:700;text-align:center;background:var(--danger)}
+.swipe.full .swipe-del{width:100%;text-align:right;padding-right:28px}
+.libcard{padding:0 0}
+.libcard .swipe{margin:0;border-radius:0;border-bottom:1px solid var(--line)}
+.libcard .swipe:last-child{border-bottom:0}
+.libcard .li{padding:11px 14px;border-bottom:0}
+.swipe{background:transparent}
+.swipe.swiping,.swipe.open{background:var(--danger)}
