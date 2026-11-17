@@ -2,6 +2,7 @@
   "name": "Logbook",
   "short_name": "Logbook",
   "description": "Personal workout log and progression tracker",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

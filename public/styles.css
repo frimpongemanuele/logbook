@@ -230,3 +230,18 @@ button,.tabbar,.strip,.set,.badge{-webkit-user-select:none;user-select:none}
 /* v0.8.1: opaque fixed strip at the top edge → iOS 26 uses its colour for the status bar instead of blurring the header */
 #topedge{position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top,0px) + 6px);background:var(--bg);z-index:15;pointer-events:auto}
 .wk-head,.hdr{background:var(--bg)}
+
+/* beta */
+.betapill{background:#1f6feb;color:#fff;vertical-align:middle;font-size:11px}
+.betacard{border:1px solid #1f6feb;background:rgba(31,111,235,.08)}
+.steps{margin:8px 0 0 18px;padding:0} .steps li{margin:4px 0}
+.col{display:flex;flex-direction:column} .g8{gap:8px} .flex1{flex:1}
+/* tutorial */
+.tour{position:fixed;inset:0;z-index:200}
+.tour-hole{position:fixed;border-radius:14px;box-shadow:0 0 0 9999px rgba(0,0,0,.62);transition:all .25s ease;pointer-events:none;outline:2px solid var(--accent)}
+.tour-hole.none{left:50%!important;top:50%!important;width:0!important;height:0!important;outline:none}
+.tour-card{position:fixed;left:16px;right:16px;max-width:460px;margin:0 auto;background:var(--surface);color:var(--text);border-radius:18px;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.4);transition:top .25s,bottom .25s}
+.tour-card.mid{top:50%;transform:translateY(-50%)}
+.tour-card h3{margin:6px 0 6px;font-size:20px}
+.tour-body p{margin:0 0 8px;color:var(--muted);line-height:1.45}
+.tour-dots{display:flex;gap:5px} .tour-dots i{width:6px;height:6px;border-radius:3px;background:var(--surface2)} .tour-dots i.on{width:16px;background:var(--accent)}

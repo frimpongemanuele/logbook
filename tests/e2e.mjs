@@ -319,12 +319,13 @@ try {
   }
   // ---- beta label, feedback, program sharing
   await page.click('[data-a="tab"][data-v="more"]');
-  ok("Beta build is labelled", (await page.textContent("h1")).includes("BETA") && !!(await page.$('[data-a="betaCopy"]')));
+  const BETA = (process.env.SITE || "beta") === "beta";
+  ok(BETA ? "Beta build is labelled" : "Live build has no beta label", BETA === ((await page.textContent("h1")).includes("BETA") && !!(await page.$('[data-a="betaCopy"]'))));
   await page.click('[data-a="openFeedback"]'); await page.click('[data-a="fbKind"][data-v="bug"]');
   await page.fill('[data-in="fbText"]', "Rest timer froze after locking the phone"); await shot("20-feedback");
   await page.click('[data-a="fbSend"]'); await page.waitForTimeout(300);
   const fb = await page.evaluate(() => navigator.clipboard.readText());
-  ok("Feedback message has type, text and diagnostics", fb.startsWith("[Logbook Bug]") && fb.includes("Rest timer froze") && /Logbook \d+\.\d+\.\d+ beta/.test(fb));
+  ok("Feedback message has type, text and diagnostics", fb.startsWith("[Logbook Bug]") && fb.includes("Rest timer froze") && (BETA ? /Logbook \d+\.\d+\.\d+ beta ·/ : /Logbook \d+\.\d+\.\d+ ·/).test(fb));
   await page.click('[data-a="tab"][data-v="programs"]'); await page.locator('[data-a="openProgram"]').first().click();
   const shareName = await page.inputValue("#pname");
   await page.click('[data-a="programMenu"]'); await page.click('.sheet button:has-text("Share program")');
