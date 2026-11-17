@@ -80,8 +80,38 @@ const ROWS: Row[] = [
   ["walk", "Walking", "Camminata", "Incline walk|Camminata in salita", "other", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "time"],
   ["run", "Running", "Corsa", "Run|Jogging", "other", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "time"],
   ["sarow", "Single-Arm Cable Row", "Rematore monolaterale ai cavi", "Row presa singola|Rematore presa singola|Single arm row|One arm cable row|Rematore a un braccio|Row monolaterale", "cable", "horizontal_pull", "compound", "external", 2.5, 90, "back", "biceps"],
+  // unilateral (single-arm) and single-leg (monopodalici)
+  ["samrow", "Single-Arm Machine Row", "Rematore monolaterale alla macchina", "Row machine monolaterale|Single arm machine row|Iso-lateral row", "machine", "horizontal_pull", "compound", "external", 5, 90, "back", "biceps"],
+  ["salatpd", "Single-Arm Lat Pulldown", "Lat machine monolaterale", "Lat machine a un braccio|Single arm pulldown|One arm lat pulldown", "cable", "vertical_pull", "compound", "external", 2.5, 90, "back", "biceps"],
+  ["sadbpress", "Single-Arm Dumbbell Press", "Distensioni monolaterali con manubrio", "Panca monolaterale manubrio|One arm dumbbell bench", "dumbbell", "horizontal_push", "compound", "external", 2, 90, "chest", "triceps,shoulders"],
+  ["sacablepress", "Single-Arm Cable Chest Press", "Chest press monolaterale al cavo", "Spinta monolaterale al cavo|One arm cable press", "cable", "horizontal_push", "compound", "external", 2.5, 90, "chest", "triceps,shoulders"],
+  ["sacablefly", "Single-Arm Cable Fly", "Croci monolaterali al cavo", "Croce monolaterale|One arm cable fly", "cable", "chest_fly", "isolation", "external", 2.5, 60, "chest", ""],
+  ["sadbsp", "Single-Arm Dumbbell Shoulder Press", "Shoulder press monolaterale con manubrio", "Lento avanti monolaterale|One arm dumbbell press", "dumbbell", "vertical_push", "compound", "external", 2, 90, "shoulders", "triceps"],
+  ["landmine", "Single-Arm Landmine Press", "Landmine press monolaterale", "Landmine press", "barbell", "vertical_push", "compound", "external", 2.5, 90, "shoulders", "chest,triceps"],
+  ["saclat", "Single-Arm Cable Lateral Raise", "Alzata laterale monolaterale al cavo", "Alzate laterali monolaterali ai cavi|One arm cable lateral", "cable", "lateral_raise", "isolation", "external", 2.5, 60, "shoulders", ""],
+  ["sarear", "Single-Arm Cable Rear Delt Fly", "Alzata posteriore monolaterale al cavo", "Rear delt monolaterale|One arm reverse fly", "cable", "rear_delt", "isolation", "external", 2.5, 60, "shoulders", "back"],
+  ["conccurl", "Concentration Curl", "Curl di concentrazione", "Concentration curl|Curl concentrato", "dumbbell", "elbow_flexion", "isolation", "external", 2, 60, "biceps", ""],
+  ["sacablecurl", "Single-Arm Cable Curl", "Curl monolaterale al cavo", "Curl al cavo a un braccio|One arm cable curl", "cable", "elbow_flexion", "isolation", "external", 2.5, 60, "biceps", ""],
+  ["saohext", "Single-Arm Overhead Extension", "French press monolaterale con manubrio", "Estensione sopra la testa monolaterale|One arm overhead extension", "dumbbell", "elbow_extension", "isolation", "external", 2, 60, "triceps", ""],
+  ["sapd", "Single-Arm Cable Pushdown", "Pushdown monolaterale al cavo", "Push down monolaterale|One arm pushdown", "cable", "elbow_extension", "isolation", "external", 2.5, 60, "triceps", ""],
+  ["sllegpress", "Single-Leg Press", "Leg press monopodalica", "Leg press a una gamba|Single leg leg press", "machine", "squat", "compound", "external", 5, 90, "quads", "glutes"],
+  ["sllegext", "Single-Leg Extension", "Leg extension monopodalica", "Leg extension a una gamba", "machine", "knee_extension", "isolation", "external", 2.5, 60, "quads", ""],
+  ["sllegcurl", "Single-Leg Curl", "Leg curl monopodalico", "Leg curl a una gamba", "machine", "knee_flexion", "isolation", "external", 2.5, 60, "hamstrings", ""],
+  ["slrdl", "Single-Leg Romanian Deadlift", "Stacco rumeno monopodalico", "Stacco a una gamba|Single leg RDL", "dumbbell", "hinge", "compound", "external", 2, 90, "hamstrings,glutes", "back"],
+  ["slhipthrust", "Single-Leg Hip Thrust", "Hip thrust monopodalico", "Ponte glutei a una gamba|Single leg glute bridge", "bodyweight", "hinge", "compound", "bw_plus", 2.5, 60, "glutes", "hamstrings"],
+  ["pistol", "Pistol Squat", "Squat monopodalico", "Pistol|Single leg squat", "bodyweight", "squat", "compound", "bw_plus", 2.5, 90, "quads", "glutes"],
+  ["stepup", "Step-Up", "Step-up", "Salita sul box|Salite sulla panca", "dumbbell", "lunge", "compound", "external", 2, 90, "quads", "glutes"],
+  ["revlunge", "Reverse Lunge", "Affondo indietro", "Affondi indietro|Reverse lunges", "dumbbell", "lunge", "compound", "external", 2, 90, "quads,glutes", "hamstrings"],
+  ["slcalf", "Single-Leg Calf Raise", "Calf raise monopodalico", "Polpacci a una gamba|One leg calf raise", "dumbbell", "calf_raise", "isolation", "external", 2, 60, "calves", ""],
+  ["glutekick", "Cable Glute Kickback", "Slanci posteriori al cavo", "Kickback glutei|Glute kickback", "cable", "hip_extension", "isolation", "external", 2.5, 60, "glutes", "hamstrings"],
+  ["cableabd", "Cable Hip Abduction", "Abduzione al cavo", "Slanci laterali al cavo|Standing cable abduction", "cable", "hip_abduction", "isolation", "external", 2.5, 60, "glutes", ""],
   ["burpee", "Burpees", "Burpee", "Burpees", "bodyweight", "cardio", "cardio", "bodyweight", 0, 60, "cardio", "", "reps"],
 ];
+
+/** Single-arm / single-leg movements (load is per arm / per leg). */
+export const UNILATERAL = new Set(["dbrow", "sarow", "samrow", "salatpd", "sadbpress", "sacablepress", "sacablefly", "sadbsp", "landmine", "saclat", "sarear",
+  "conccurl", "sacablecurl", "bayesian", "kickback", "saohext", "sapd", "lunge", "bss", "sllegpress", "sllegext", "sllegcurl", "slrdl", "slhipthrust",
+  "pistol", "stepup", "revlunge", "slcalf", "glutekick", "cableabd", "dbcurl"]);
 
 export const MUSCLES = ["chest", "back", "shoulders", "biceps", "triceps", "forearms", "quads", "hamstrings", "glutes", "calves", "abs", "cardio"];
 
@@ -89,6 +119,7 @@ export function seedExercises(now: number) {
   return ROWS.map(r => ({
     id: "ex_" + r[0], name: { en: r[1], it: r[2] }, aliases: r[3] ? r[3].split("|") : [],
     equipment: r[4], pattern: r[5], mechanic: r[6], loadType: r[7], inc: r[8], rest: r[9], track: r[12] || "wr",
+    laterality: UNILATERAL.has(r[0]) ? "unilateral" : "bilateral",
     muscles: [
       ...r[10].split(",").filter(Boolean).map(m => ({ m, role: "primary" as const })),
       ...r[11].split(",").filter(Boolean).map(m => ({ m, role: "secondary" as const })),

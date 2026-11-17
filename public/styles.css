@@ -217,11 +217,13 @@ button,.tabbar,.strip,.set,.badge{-webkit-user-select:none;user-select:none}
 .swipe .card{margin-bottom:0;border-radius:0}
 .swipe-in{position:relative;background:var(--surface);touch-action:pan-y;transition:transform .2s ease;will-change:transform}
 .swipe.swiping .swipe-in{transition:none}
-.swipe-del{position:absolute;top:0;right:0;bottom:0;width:92px;color:#fff;font-weight:700;text-align:center;background:var(--danger)}
-.swipe.full .swipe-del{width:100%;text-align:right;padding-right:28px}
+.swipe-acts{position:absolute;top:0;right:0;bottom:0;display:flex}
+.swipe-act{width:84px;color:#fff;font-weight:700;font-size:14px;text-align:center;padding:0 6px}
+.swipe-act.del{background:var(--danger)} .swipe-act.main{background:var(--accent);color:var(--accent-ink)} .swipe-act.mid{background:#5f6670}
+.swipe.full .swipe-acts{left:0} .swipe.full .swipe-act.del{flex:1;text-align:right;padding-right:28px}
 .libcard{padding:0 0}
 .libcard .swipe{margin:0;border-radius:0;border-bottom:1px solid var(--line)}
 .libcard .swipe:last-child{border-bottom:0}
 .libcard .li{padding:11px 14px;border-bottom:0}
 .swipe{background:transparent}
-.swipe.swiping,.swipe.open{background:var(--danger)}
+

@@ -177,6 +177,49 @@ try {
   await page.click('[data-a="undo"]'); await page.waitForTimeout(250);
   await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]'); await page.click('[data-a="openDay"][data-v="0"]');
   ok("Undo puts it back in the program day", (await page.textContent(".scroll")).includes("Triceps Pushdown"));
+  // programs: swipe actions, long-press menu, delete / undo / restore
+  await page.click('[data-a="tab"][data-v="programs"]');
+  await page.click('[data-a="newProgram"]'); await page.fill("#pname", "Test plan"); await page.waitForTimeout(500); await page.click('[data-a="tab"][data-v="programs"]');
+  const progNames = async () => page.$$eval('.swipe [data-a="openProgram"] b', els => els.map(e => e.textContent));
+  ok("New program listed", (await progNames()).includes("Test plan"));
+  const testRow = '.swipe:has-text("Test plan") .swipe-in';
+  await swipe(testRow, -260);
+  ok("Swipe shows Activate · Archive · Delete", (await page.$$eval(".swipe.open .swipe-act", els => els.map(e => e.textContent))).join("|") === "Activate|Archive|Delete");
+  await shot("18-program-swipe");
+  await page.click(".swipe.open .swipe-act.main"); await page.waitForTimeout(250);
+  ok("Activate from swipe", (await page.textContent('.swipe:has-text("Test plan")')).includes("Active"));
+  // long-press (hold 700 ms) on the other program → menu → Make active
+  const pb = await page.locator('.swipe:has-text("PPL") .swipe-in').boundingBox();
+  await page.mouse.move(pb.x + 60, pb.y + pb.height / 2); await page.mouse.down(); await page.waitForTimeout(700); await page.mouse.up(); await page.waitForTimeout(200);
+  ok("Long-press opens the program menu (not the program)", (await page.textContent(".sheet")).includes("Make active") && (await page.textContent(".sheet")).includes("Delete program") && (await page.textContent("h1")) === "Programs");
+  await shot("19-program-longpress");
+  await page.click('.menu button:has-text("Make active")'); await page.waitForTimeout(250);
+  ok("Long-press → Make active switches back", (await page.textContent('.swipe:has-text("PPL")')).includes("Active"));
+  await swipe(testRow, -260); await page.click(".swipe.open .swipe-act.del"); await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
+  ok("Delete program (asks first)", !(await progNames()).includes("Test plan") && (await page.textContent(".toast")).includes("Program deleted"));
+  await page.click('[data-a="undo"]'); await page.waitForTimeout(250);
+  ok("Undo restores the program", (await progNames()).includes("Test plan"));
+  await swipe(testRow, -260); await page.click('.swipe.open .swipe-act:has-text("Archive")'); await page.waitForTimeout(250);
+  ok("Archive from swipe → Archived section", (await page.textContent(".scroll")).includes("Archived"));
+  await swipe(testRow, -200);
+  ok("Archived row offers Restore · Delete", (await page.$$eval(".swipe.open .swipe-act", els => els.map(e => e.textContent))).join("|") === "Restore|Delete");
+  await page.click(".swipe.open .swipe-act.del"); await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
+  ok("Archived program deleted", !(await page.textContent(".scroll")).includes("Test plan"));
+  await page.click('[data-a="tab"][data-v="more"]');
+  ok("More lists deleted programs", (await page.textContent(".scroll")).includes("Deleted programs"));
+  await page.click('[data-a="progPurge"]'); await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
+  ok("Delete permanently", !(await page.textContent(".scroll")).includes("Deleted programs"));
+  // long-press a History row
+  await page.click('[data-a="tab"][data-v="history"]');
+  const hb = await page.locator(".swipe-in").first().boundingBox();
+  await page.mouse.move(hb.x + 60, hb.y + hb.height / 2); await page.mouse.down(); await page.waitForTimeout(700); await page.mouse.up(); await page.waitForTimeout(200);
+  ok("Long-press a workout → Open / Delete menu", (await page.textContent(".sheet")).includes("Discard workout") && (await page.textContent("h1")) === "History");
+  await page.click('[data-a="scrim"]', { position: { x: 10, y: 10 } });
+  // unilateral filter
+  await page.click('[data-a="tab"][data-v="library"]'); await page.fill(".search", ""); await page.click('[data-a="libMuscle"][data-v="uni"]'); await page.waitForTimeout(150);
+  const uni = await page.textContent(".libcard");
+  ok("Unilateral filter lists single-arm / single-leg moves", uni.includes("Single-Leg Press") && uni.includes("Single-Arm Cable Row") && !uni.includes("Bench Press"));
+  await page.click('[data-a="libMuscle"][data-v=""]');
   await page.click('[data-a="tab"][data-v="more"]');
   ok("More lists deleted exercises with Restore", (await page.textContent(".scroll")).includes("Deleted exercises") && (await page.textContent(".scroll")).includes("Plank"));
   await page.click('[data-a="restoreEx"]'); await page.waitForTimeout(200);

@@ -151,3 +151,13 @@ test("progression with no rep ceiling: up once every set beats the minimum by 4"
   const up = suggest(sets([12, 12, 13]), 5); assert.equal(up.kind, "up"); assert.equal(up.openEnded, true); assert.deepEqual(up.loads, [65, 65, 65]);
   const keep = suggest(sets([12, 10, 9]), 5); assert.equal(keep.kind, "reps"); assert.equal(keep.limitTarget, 12);
 });
+
+test("unilateral / single-leg library entries match Italian names", () => {
+  const m = n => nm(matchExercise(n, lib).id);
+  assert.equal(m("Leg press monopodalica"), "Single-Leg Press");
+  assert.equal(m("Stacco rumeno monopodalico"), "Single-Leg Romanian Deadlift");
+  assert.equal(m("Lat machine monolaterale"), "Single-Arm Lat Pulldown");
+  assert.equal(m("Curl di concentrazione"), "Concentration Curl");
+  assert.equal(libMap.get("ex_sarow").laterality, "unilateral"); assert.equal(libMap.get("ex_sarow").custom, false);
+  assert.equal(libMap.get("ex_bench").laterality, "bilateral");
+});

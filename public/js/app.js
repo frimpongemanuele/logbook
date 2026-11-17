@@ -5,7 +5,7 @@ import { seedExercises, MUSCLES } from "./seed.js";
 import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2, fmtRange, OPEN_MARGIN } from "./domain.js";
 import { setsCsv, mergeImport } from "./data.js";
 import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine, dayName } from "./importer.js";
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 const DAY = 86400000;
 const A = {
     lib: new Map(), programs: [], sessions: [],
@@ -101,6 +101,10 @@ async function boot() {
             }
             if (!cur.track) {
                 cur.track = sd.track;
+                ch = true;
+            }
+            if (!cur.custom && cur.laterality !== sd.laterality) {
+                cur.laterality = sd.laterality;
                 ch = true;
             }
             if (ch)
@@ -324,8 +328,12 @@ const I = {
     list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" width="20" height="20"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true" width="20" height="20"><path d="M12 5v14M5 12h14"/></svg>',
 };
-/** A row you can swipe left to reveal Delete (full swipe deletes straight away). */
-const swipeRow = (inner, delAttrs) => `<div class="swipe"><button class="swipe-del" ${delAttrs}>${t("delete")}</button><div class="swipe-in">${inner}</div></div>`;
+/** Row you can swipe left for actions. One Delete action: a full swipe deletes. lp = long-press menu ("program:id"). */
+function swipeRow(inner, acts, lp = "") {
+    const list = typeof acts === "string" ? [{ label: t("delete"), attrs: acts, cls: "del swipe-del" }] : acts;
+    const full = typeof acts === "string";
+    return `<div class="swipe" data-w="${list.length * 84}" ${full ? 'data-full="1"' : ""}><div class="swipe-acts">${list.map(a => `<button class="swipe-act ${a.cls || ""}" ${a.attrs}>${a.label}</button>`).join("")}</div><div class="swipe-in" ${lp ? `data-lp="${lp}"` : ""}>${inner}</div></div>`;
+}
 const header = (title, right = "") => `<header class="hdr"><button class="iconbtn" data-a="back" aria-label="${t("back")}">${I.back}</button><div class="hdr-t">${esc(title)}</div><div class="hdr-r">${right}</div></header>`;
 /* ---------------- theme ---------------- */
 const darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
@@ -488,7 +496,7 @@ function vWorkout(s) {
     const partner = e.group ? s.exercises.filter((x) => x.group === e.group && x !== e).map((x) => esc(nm(x.name))).join(", ") : "";
     const body = `<div class="wk-body scroll" id="wkbody">
     <div class="row spread top"><h2 class="ex-name">${esc(nm(e.name))}</h2><button class="iconbtn" data-a="exMenu" aria-label="${t("edit")}">${I.dots}</button></div>
-    <div class="ex-meta"><span class="pill">${t("eq_" + (ex?.equipment || "other"))}</span><button class="pill num pillbtn" data-a="restEdit">${t("restOn")} ${rest}${t("sec")} ✎</button>${(ex?.track || "wr") === "wr" ? `<span class="pill num">+${fmt(ex?.inc)} kg</span>` : ""}
+    <div class="ex-meta"><span class="pill">${t("eq_" + (ex?.equipment || "other"))}</span>${ex?.laterality === "unilateral" ? `<span class="pill">${t("unilateral")} · ${t("perSide")}</span>` : ""}<button class="pill num pillbtn" data-a="restEdit">${t("restOn")} ${rest}${t("sec")} ✎</button>${(ex?.track || "wr") === "wr" ? `<span class="pill num">+${fmt(ex?.inc)} kg</span>` : ""}
       ${e.scheme && e.scheme !== "straight" ? `<span class="pill accent">${t("sch_" + e.scheme + "_s")}</span>` : ""}${e.optional ? `<span class="pill">${t("optional")}</span>` : ""}${e.skipped ? `<span class="pill warn">${t("skip")}</span>` : ""}${partner ? `<span class="pill accent">${t("superset")} ${esc(e.group)}: ${partner}</span>` : ""}</div>
     ${e.exId !== e.plannedExId ? `<div class="note">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
     ${e.notes ? `<div class="note">${esc(e.notes)}</div>` : ""}
@@ -688,7 +696,7 @@ function vHistory() {
         h += `<p class="sub">${t("noSessions")}</p>`;
     h += list.map((s) => {
         const st = sessionStats(s);
-        return swipeRow(`<button class="card rowbtn" data-a="openSession" data-id="${s.id}"><span><b>${esc(nm(s.dayName))}</b><span class="sub block">${sessionDate(s)}${s.dateUnknown ? "" : " · " + clock(elapsed(s))}</span></span><span class="muted num small r">${st.sets} ${t("sets").toLowerCase()}<br>${Math.round(st.vol).toLocaleString(locale())} kg</span></button>`, `data-a="swipeDelSession" data-id="${s.id}"`);
+        return swipeRow(`<button class="card rowbtn" data-a="openSession" data-id="${s.id}"><span><b>${esc(nm(s.dayName))}</b><span class="sub block">${sessionDate(s)}${s.dateUnknown ? "" : " · " + clock(elapsed(s))}</span></span><span class="muted num small r">${st.sets} ${t("sets").toLowerCase()}<br>${Math.round(st.vol).toLocaleString(locale())} kg</span></button>`, `data-a="swipeDelSession" data-id="${s.id}"`, `session:${s.id}`);
     }).join("");
     if (list.length)
         h += `<p class="faint small c">${t("swipeTip")}</p>`;
@@ -725,12 +733,18 @@ function vSession(p) {
 }
 /* ---------------- Programs ---------------- */
 function vPrograms() {
-    const act = A.programs.filter((p) => p.status !== "archived");
+    const act = A.programs.filter((p) => p.status !== "archived" && p.status !== "deleted").sort((a, b) => (b.status === "active" ? 1 : 0) - (a.status === "active" ? 1 : 0));
     const arc = A.programs.filter((p) => p.status === "archived");
+    const acts = (p) => p.status === "archived"
+        ? [{ label: t("unarchive"), attrs: `data-a="progRestore" data-id="${p.id}"`, cls: "main" }, { label: t("delete"), attrs: `data-a="progDelete" data-id="${p.id}"`, cls: "del" }]
+        : [...(p.status !== "active" ? [{ label: t("activate"), attrs: `data-a="progActivate" data-id="${p.id}"`, cls: "main" }] : []),
+            { label: t("archive"), attrs: `data-a="progArchive" data-id="${p.id}"`, cls: "mid" }, { label: t("delete"), attrs: `data-a="progDelete" data-id="${p.id}"`, cls: "del" }];
     const card = (p) => `<button class="card rowbtn" data-a="openProgram" data-id="${p.id}"><span><b>${esc(p.name)}</b><span class="sub block">${p.days.map((d) => esc(nm(d.name))).join(" · ") || "—"}</span></span><span>${p.status === "active" ? `<span class="pill accent">${t("active")}</span>` : ""}</span></button>`;
-    return `<div class="scroll"><h1>${t("programs")}</h1>${act.map(card).join("")}
+    const row = (p) => swipeRow(card(p), acts(p), `program:${p.id}`);
+    return `<div class="scroll"><h1>${t("programs")}</h1>${act.map(row).join("")}
     <button class="btn ghost block mt8" data-a="newProgram">+ ${t("newProgram")}</button>
-    ${arc.length ? `<h2>${t("archived")}</h2>${arc.map(card).join("")}` : ""}</div>`;
+    ${arc.length ? `<h2>${t("archived")}</h2>${arc.map(row).join("")}` : ""}
+    ${act.length + arc.length ? `<p class="faint small c mt12">${t("progTip")}</p>` : ""}</div>`;
 }
 const findProg = (id) => A.programs.find((p) => p.id === id);
 function vProgram(p) {
@@ -803,13 +817,13 @@ function vPe(p) {
 function libList(mode, ctx) {
     const q = A.q.trim().toLowerCase();
     const list = [...A.lib.values()].filter((e) => !e.archived)
-        .filter((e) => !A.qm || e.muscles.some((m) => m.m === A.qm && m.role === "primary"))
+        .filter((e) => !A.qm || (A.qm === "uni" ? e.laterality === "unilateral" : e.muscles.some((m) => m.m === A.qm && m.role === "primary")))
         .filter((e) => !q || [e.name.en, e.name.it, ...(e.aliases || [])].some((n) => n.toLowerCase().includes(q)))
         .sort((a, b) => nm(a.name).localeCompare(nm(b.name), locale()));
-    const chips = `<div class="chips-row">${["", ...MUSCLES].map(m => `<button class="chipf ${A.qm === m ? "on" : ""}" data-a="libMuscle" data-v="${m}">${m ? t("m_" + m) : t("all")}</button>`).join("")}</div>`;
+    const chips = `<div class="chips-row">${["", "uni", ...MUSCLES].map(m => `<button class="chipf ${A.qm === m ? "on" : ""}" data-a="libMuscle" data-v="${m}">${m === "uni" ? t("unilateral") : m ? t("m_" + m) : t("all")}</button>`).join("")}</div>`;
     const row = (e) => `<button class="li btnli" data-a="${mode}" data-id="${e.id}" ${ctx ? `data-ctx='${esc(JSON.stringify(ctx))}'` : ""}>
-      <span><span class="b">${esc(nm(e.name))}</span>${e.custom ? ` <span class="pill">${t("custom")}</span>` : ""}<span class="sub block small">${t("eq_" + e.equipment)} · ${e.muscles.filter((m) => m.role === "primary").map((m) => t("m_" + m.m)).join(", ")}</span></span>${I.chev}</button>`;
-    const items = list.map((e) => (mode === "openExercise" ? swipeRow(row(e), `data-a="swipeDelEx" data-id="${e.id}"`) : row(e))).join("");
+      <span><span class="b">${esc(nm(e.name))}</span>${e.custom ? ` <span class="pill">${t("custom")}</span>` : ""}<span class="sub block small">${t("eq_" + e.equipment)} · ${e.muscles.filter((m) => m.role === "primary").map((m) => t("m_" + m.m)).join(", ")}${e.laterality === "unilateral" ? " · " + t("unilateral") : ""}</span></span>${I.chev}</button>`;
+    const items = list.map((e) => (mode === "openExercise" ? swipeRow(row(e), `data-a="swipeDelEx" data-id="${e.id}"`, `exercise:${e.id}`) : row(e))).join("");
     return `<input class="inp search" type="search" placeholder="${t("search")}" value="${esc(A.q)}" data-in="libQ" autocomplete="off">${chips}<div class="card libcard">${items || `<p class="sub">—</p>`}</div>${mode === "openExercise" && list.length ? `<p class="faint small c">${t("swipeTipEx")}</p>` : ""}`;
 }
 function vLibrary() {
@@ -909,7 +923,7 @@ function vExercise(p) {
     const chart = hist.length ? `<h2>${t("progressT")}</h2><div class="card">${metricsFor(tr).length > 1 ? `<div class="seg mb8">${metricsFor(tr).map(k => `<button class="${k === em ? "on" : ""}" data-a="exMetric" data-v="${k}">${t("m_" + k)}</button>`).join("")}</div>` : ""}${deltaLine(sp, em)}${lineChart(sp, em)}</div>` : "";
     const rec = (lbl, r, val) => `<div class="li"><span>${lbl}</span><span class="r num"><b>${val}</b><span class="sub block small">${r ? `${loadTxt(ex, r.x.load)}×${r.x.reps}${r.x.rir != null ? " @" + r.x.rir : ""} · ${sessionDate(r.s)}` : ""}</span></span></div>`;
     return header(nm(ex.name), `<button class="iconbtn" data-a="exEdit" data-id="${ex.id}" aria-label="${t("edit")}">${I.dots}</button>`) + `<div class="scroll">
-    <div class="ex-meta"><span class="pill">${t("eq_" + ex.equipment)}</span>${ex.muscles.map((m) => `<span class="pill ${m.role === "primary" ? "accent" : ""}">${t("m_" + m.m)}${m.role === "secondary" ? " ½" : ""}</span>`).join("")}</div>
+    <div class="ex-meta"><span class="pill">${t("eq_" + ex.equipment)}</span>${ex.laterality === "unilateral" ? `<span class="pill">${t("unilateral")}</span>` : ""}${ex.muscles.map((m) => `<span class="pill ${m.role === "primary" ? "accent" : ""}">${t("m_" + m.m)}${m.role === "secondary" ? " ½" : ""}</span>`).join("")}</div>
     <div class="row g8">${tr === "wr" ? `<button class="cell num flex1" data-a="exInc" data-id="${ex.id}">+${fmt(ex.inc)} kg</button>` : ""}<button class="cell num flex1" data-a="exRest" data-id="${ex.id}">${ex.rest} ${t("sec")} ${t("restOn")}</button></div>
     ${hist.length && tr === "wr" ? `<h2>${t("records")}</h2><div class="card">${rec(t("heaviest"), heavy, loadTxt(ex, heavy.x.load) + " kg")}${bestE ? rec(t("bestE1rm"), bestE, "~" + Math.round(bestE.v) + " kg") : ""}${rec(t("bestSet"), bestV, Math.round(bestV.v) + " kg")}</div>` : ""}
     ${chart}
@@ -1114,6 +1128,7 @@ async function ocrImage(file, progress) {
 function vMore() {
     const disc = A.sessions.filter((s) => s.status === "discarded").sort((a, b) => b.startedAt - a.startedAt);
     const lb = A.settings.lastBackupAt, due = backupDue();
+    const delP = A.programs.filter((p) => p.status === "deleted");
     const delEx = [...A.lib.values()].filter((e) => e.archived).sort((a, b) => nm(a.name).localeCompare(nm(b.name), locale()));
     return `<div class="scroll"><h1>${t("more")}</h1>
     <div class="card ${due ? "duecard" : ""}"><div class="row g8"><span class="flex1"><b>${t("backupShort")}</b><span class="sub small block">${t("lastBackup", { d: lb ? dstr(lb) : t("never") })}${due ? " · " + t("backupDueShort") : ""}</span></span>
@@ -1126,6 +1141,7 @@ function vMore() {
     <button class="btn ghost block" data-a="exportCsv">${t("exportCsv")}</button>
     <label class="btn ghost block mt8 filebtn">${t("importJson")}<input type="file" accept=".json,.csv,.tsv,.txt,.md,.xlsx,image/*,text/*,application/json" data-in="impFile" hidden></label>
     ${disc.length ? `<h2>${t("discarded")}</h2><div class="card">${disc.map((s) => `<div class="li"><span class="flex1">${esc(nm(s.dayName))}<span class="sub block small">${sessionDate(s)} · ${sessionStats(s).sets} ${t("sets").toLowerCase()}</span></span><button class="btn ghost small" data-a="restoreSession" data-id="${s.id}">${t("restore")}</button><button class="iconbtn danger" data-a="purgeSession" data-id="${s.id}" aria-label="${t("deleteForever")}">${I.x}</button></div>`).join("")}</div>` : ""}
+    ${delP.length ? `<h2>${t("deletedPrograms")}</h2><div class="card">${delP.map((p) => `<div class="li"><span class="flex1">${esc(p.name)}</span><button class="btn ghost small" data-a="progRestore" data-id="${p.id}">${t("restore")}</button><button class="iconbtn danger" data-a="progPurge" data-id="${p.id}" aria-label="${t("deleteForever")}">${I.x}</button></div>`).join("")}</div>` : ""}
     ${delEx.length ? `<h2>${t("deletedEx")}</h2><div class="card">${delEx.map((e) => `<div class="li"><span>${esc(nm(e.name))}</span><button class="btn ghost small" data-a="restoreEx" data-id="${e.id}">${t("restore")}</button></div>`).join("")}</div>` : ""}
     <h2>${t("storage")}</h2><div class="card"><div class="sub">${A.persisted ? t("persisted") : t("notPersisted")}</div><div class="sub mt8">${t("installHint")}</div></div>
     <p class="faint small c mt16">Logbook ${VERSION}</p></div>`;
@@ -1597,28 +1613,38 @@ app.addEventListener("click", async (ev) => {
                 go("program", { id: p.id });
                 return;
             }
-            case "programMenu": {
+            case "programMenu":
+                programActions(findProg(d.id), true);
+                return;
+            case "progActivate":
+                closeSwipes();
+                await activateProgram(findProg(d.id));
+                break;
+            case "progArchive":
+                closeSwipes();
+                {
+                    const p = findProg(d.id);
+                    p.status = "archived";
+                    await saveProgram(p);
+                    toast(t("progArchived"), async () => { p.status = "inactive"; await saveProgram(p); });
+                }
+                break;
+            case "progRestore":
+                closeSwipes();
+                {
+                    const p = findProg(d.id);
+                    p.status = p.prevStatus === "active" && !activeProgram() ? "active" : "inactive";
+                    delete p.prevStatus;
+                    await saveProgram(p);
+                }
+                break;
+            case "progDelete":
+                closeSwipes();
+                deleteProgram(findProg(d.id));
+                return;
+            case "progPurge": {
                 const p = findProg(d.id);
-                menu(p.name, [
-                    ...(p.status !== "active" ? [{ label: t("makeActive"), on: async () => { for (const q of A.programs)
-                                if (q.status === "active") {
-                                    q.status = "inactive";
-                                    await saveProgram(q);
-                                } p.status = "active"; await saveProgram(p); } }] : []),
-                    { label: t("duplicate"), on: async () => {
-                            const c = JSON.parse(JSON.stringify(p));
-                            c.id = uid();
-                            c.name = p.name + " (2)";
-                            c.status = "inactive";
-                            c.createdAt = now();
-                            c.days.forEach((dd) => { dd.id = uid(); dd.exercises.forEach((pe) => { pe.id = uid(); pe.sets.forEach((x) => x.id = uid()); }); });
-                            await saveProgram(c);
-                            A.programs.push(c);
-                            A.nav[A.nav.length - 1] = { v: "program", p: { id: c.id } };
-                        } },
-                    p.status === "archived" ? { label: t("unarchive"), on: async () => { p.status = "inactive"; await saveProgram(p); } }
-                        : { label: t("archive"), on: async () => { p.status = "archived"; await saveProgram(p); back(); } },
-                ]);
+                confirmSheet(t("deleteForever"), `${p.name}. ${t("cantUndo")}`, t("delete"), true, async () => { await db.del("programs", p.id); A.programs = A.programs.filter((x) => x !== p); });
                 return;
             }
             case "openDay":
@@ -1933,6 +1959,76 @@ function askFinish(s) {
 function askDiscard(s) {
     confirmSheet(t("confirmDiscard"), t("confirmDiscardBody"), t("discard"), true, async () => { s.status = "discarded"; s.discardedAt = now(); await saveSession(s); releaseWake(); A.nav = [{ v: "today", p: {} }]; });
 }
+/* ---- program actions (menu, swipe, long-press) */
+async function activateProgram(p) {
+    for (const q of A.programs)
+        if (q.status === "active" && q !== p) {
+            q.status = "inactive";
+            await saveProgram(q);
+        }
+    p.status = "active";
+    await saveProgram(p);
+    toast(t("progActive", { x: p.name }));
+}
+async function duplicateProgram(p) {
+    const c = JSON.parse(JSON.stringify(p));
+    c.id = uid();
+    c.name = p.name + " (2)";
+    c.status = "inactive";
+    c.createdAt = now();
+    c.days.forEach((dd) => { dd.id = uid(); dd.exercises.forEach((pe) => { pe.id = uid(); pe.sets.forEach((x) => x.id = uid()); }); });
+    await saveProgram(c);
+    A.programs.push(c);
+    return c;
+}
+function deleteProgram(p) {
+    confirmSheet(t("deleteProgramQ", { x: p.name }), t("deleteProgramBody"), t("delete"), true, async () => {
+        p.prevStatus = p.status;
+        p.status = "deleted";
+        p.deletedAt = now();
+        await saveProgram(p);
+        if (route().v === "program" || route().v === "day" || route().v === "pe")
+            A.nav = [{ v: "programs", p: {} }];
+        toast(t("progDeleted"), async () => { p.status = p.prevStatus; delete p.prevStatus; delete p.deletedAt; await saveProgram(p); });
+    });
+}
+function programActions(p, inDetail) {
+    menu(p.name, [
+        ...(p.status !== "active" && p.status !== "archived" ? [{ label: t("makeActive"), on: () => activateProgram(p) }] : []),
+        ...(!inDetail ? [{ label: t("edit"), on: () => go("program", { id: p.id }) }] : []),
+        { label: t("duplicate"), on: async () => { const c = await duplicateProgram(p); go("program", { id: c.id }); } },
+        p.status === "archived" ? { label: t("unarchive"), on: async () => { p.status = "inactive"; await saveProgram(p); } }
+            : { label: t("archive"), on: async () => { p.status = "archived"; await saveProgram(p); if (inDetail)
+                    back(); } },
+        { label: t("deleteProgram"), danger: true, on: () => deleteProgram(p) },
+    ]);
+}
+/** Long-press menus for list rows. */
+function longPress(spec) {
+    const [kind, id] = spec.split(":");
+    if (kind === "program") {
+        const p = findProg(id);
+        if (p)
+            programActions(p, false);
+    }
+    if (kind === "session") {
+        const ss = A.sessions.find((x) => x.id === id);
+        if (ss)
+            menu(`${nm(ss.dayName)} · ${sessionDate(ss)}`, [
+                { label: t("open"), on: () => go("session", { id }) },
+                { label: t("deleteWorkout"), danger: true, on: async () => { ss.status = "discarded"; ss.discardedAt = now(); await saveSession(ss); toast(t("workoutDeleted"), async () => { ss.status = "completed"; await saveSession(ss); }); } }
+            ]);
+    }
+    if (kind === "exercise") {
+        const ex = exById(id);
+        if (ex)
+            menu(nm(ex.name), [
+                { label: t("open"), on: () => go("exercise", { id }) },
+                { label: t("edit"), on: () => { A.form = null; go("exform", { id }); } },
+                { label: t("deleteExercise"), danger: true, on: () => deleteExercise(ex, false) }
+            ]);
+    }
+}
 /** Delete from the library: hidden everywhere and removed from programs; past workouts keep it. Undo / restore in More. */
 async function deleteExercise(ex, fromDetail) {
     if (!ex)
@@ -2187,8 +2283,15 @@ app.addEventListener("change", async (ev) => {
     }
 });
 /* swipe-to-delete rows (pointer events; vertical scrolling stays native via touch-action: pan-y) */
-let sw = null, swipeBlockUntil = 0;
+let sw = null, swipeBlockUntil = 0, lpBlockUntil = 0, lpPending = false;
 const SW_OPEN = 92;
+let lpTimer = null;
+const clearLp = () => { if (lpTimer) {
+    clearTimeout(lpTimer);
+    lpTimer = null;
+} };
+app.addEventListener("contextmenu", e => { if (e.target.closest("[data-lp]"))
+    e.preventDefault(); });
 function closeSwipes(except) { app.querySelectorAll(".swipe.open").forEach(r => { if (r !== except) {
     r.classList.remove("open");
     r.querySelector(".swipe-in").style.transform = "";
@@ -2196,23 +2299,42 @@ function closeSwipes(except) { app.querySelectorAll(".swipe.open").forEach(r => 
 app.addEventListener("pointerdown", ev => {
     const inn = ev.target.closest(".swipe-in");
     if (!inn) {
-        if (!ev.target.closest(".swipe-del") && app.querySelector(".swipe.open")) {
+        if (!ev.target.closest(".swipe-act") && app.querySelector(".swipe.open")) {
             closeSwipes();
             swipeBlockUntil = Date.now() + 350;
         }
         return;
     }
     const row = inn.parentElement;
-    if (app.querySelector(".swipe.open") && !row.classList.contains("open")) {
+    if (row.classList.contains("open") || app.querySelector(".swipe.open")) {
+        // like iOS: a touch on any row while one is open just closes it
         closeSwipes();
         swipeBlockUntil = Date.now() + 350;
+        if (row.classList.contains("open")) {
+            row.classList.remove("open");
+            inn.style.transform = "";
+            return;
+        }
     }
-    sw = { inn, row, x0: ev.clientX, y0: ev.clientY, base: row.classList.contains("open") ? -SW_OPEN : 0, dir: "", x: 0, pid: ev.pointerId, w: row.getBoundingClientRect().width };
+    const openW = parseInt(row.dataset.w || "") || SW_OPEN;
+    sw = { inn, row, x0: ev.clientX, y0: ev.clientY, base: row.classList.contains("open") ? -openW : 0, dir: "", x: 0, pid: ev.pointerId, w: row.getBoundingClientRect().width, openW, full: !!row.dataset.full };
+    clearLp();
+    if (inn.dataset.lp && !row.classList.contains("open")) {
+        const spec = inn.dataset.lp;
+        lpTimer = setTimeout(() => { lpTimer = null; if (sw && !sw.dir) {
+            sw = null;
+            lpPending = true;
+            haptic();
+            longPress(spec);
+        } }, 480);
+    }
 });
 app.addEventListener("pointermove", ev => {
     if (!sw || ev.pointerId !== sw.pid)
         return;
     const dx = ev.clientX - sw.x0, dy = ev.clientY - sw.y0;
+    if (Math.abs(dx) > 8 || Math.abs(dy) > 8)
+        clearLp();
     if (!sw.dir) {
         if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
             sw.dir = "h";
@@ -2229,11 +2351,12 @@ app.addEventListener("pointermove", ev => {
         else
             return;
     }
-    sw.x = Math.max(-sw.w * 0.95, Math.min(0, sw.base + dx));
+    sw.x = Math.max(sw.full ? -sw.w * 0.95 : -(sw.openW + 40), Math.min(0, sw.base + dx));
     sw.inn.style.transform = `translateX(${sw.x}px)`;
-    sw.row.classList.toggle("full", sw.x < -sw.w * 0.6);
+    sw.row.classList.toggle("full", sw.full && sw.x < -sw.w * 0.6);
 });
 const endSwipe = (ev) => {
+    clearLp();
     if (!sw || ev.pointerId !== sw.pid)
         return;
     const g = sw;
@@ -2242,27 +2365,46 @@ const endSwipe = (ev) => {
         return;
     swipeBlockUntil = Date.now() + 350;
     g.row.classList.remove("swiping");
-    if (g.x < -g.w * 0.6) {
+    if (g.full && g.x < -g.w * 0.6) {
         haptic();
-        g.row.querySelector(".swipe-del").click();
+        g.row.querySelector(".swipe-act.del").click();
         return;
     } // full swipe = delete
-    const open = g.x < -SW_OPEN / 2;
+    const open = g.x < -g.openW / 2;
     g.row.classList.toggle("open", open);
     g.row.classList.remove("full");
-    g.inn.style.transform = open ? `translateX(${-SW_OPEN}px)` : "";
+    g.inn.style.transform = open ? `translateX(${-g.openW}px)` : "";
     if (open) {
         closeSwipes(g.row);
         haptic();
     }
 };
 app.addEventListener("pointerup", endSwipe);
+app.addEventListener("pointerup", () => { if (lpPending) {
+    lpPending = false;
+    lpBlockUntil = Date.now() + 150;
+} }, true);
+document.addEventListener("pointerup", () => { if (lpPending) {
+    lpPending = false;
+    lpBlockUntil = Date.now() + 150;
+} }, true);
 app.addEventListener("pointercancel", endSwipe);
 // a click right after a swipe (or tapping away from an open row) must not open the row
-app.addEventListener("click", ev => { if (Date.now() < swipeBlockUntil && !ev.target.closest(".swipe-del")) {
-    ev.stopPropagation();
-    ev.preventDefault();
-} }, true);
+app.addEventListener("click", ev => {
+    const tg = ev.target;
+    // after a long-press, only the row's own release-click is swallowed (the menu that opened stays tappable)
+    // the finger lifting after a long-press sends one click to whatever is under it now (often the menu backdrop): drop exactly that one
+    if (Date.now() < lpBlockUntil) {
+        lpBlockUntil = 0;
+        ev.stopPropagation();
+        ev.preventDefault();
+        return;
+    }
+    if (Date.now() < swipeBlockUntil && !tg.closest(".swipe-act")) {
+        ev.stopPropagation();
+        ev.preventDefault();
+    }
+}, true);
 // behave like an app: no double-tap or pinch zoom
 document.addEventListener("gesturestart", e => e.preventDefault());
 document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
