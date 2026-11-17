@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { suggest, e1rm, predictReps, adjReps, volumeLoad, muscleSets } from "../public/js/domain.js";
-import { setsCsv, mergeImport } from "../public/js/data.js";
-import { seedExercises, buildProgram, buildHistory, emptyProgram } from "../public/js/seed.js";
+import { suggest, e1rm, predictReps, adjReps, volumeLoad, muscleSets } from "../beta/js/domain.js";
+import { setsCsv, mergeImport } from "../beta/js/data.js";
+import { seedExercises, buildProgram, buildHistory, emptyProgram } from "../beta/js/seed.js";
 
 const T = { repsMin: 8, repsMax: 12, rir: 2 };
 const three = (reps, rir, load = 80) => reps.map((r, i) => ({ type: "working", load, reps: r, rir: Array.isArray(rir) ? rir[i] : rir, done: true, t: T }));

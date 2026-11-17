@@ -1,15 +1,15 @@
-// Browser flows on an iPhone-sized Chromium. Run: node tests/e2e.mjs (serves ./public on :8765)
+// Browser flows on an iPhone-sized Chromium. Run: node tests/e2e.mjs (serves ./beta on :8765; SITE=public for the live build)
 import { createRequire } from "module"; import { execSync, spawn } from "child_process"; import fs from "fs";
 const require = createRequire(import.meta.url);
 const { chromium } = require(execSync("npm root -g").toString().trim() + "/playwright");
-const srv = spawn("python3", ["-m", "http.server", "8765", "-d", "public"], { stdio: "ignore" });
+const srv = spawn("python3", ["-m", "http.server", "8765", "-d", process.env.SITE || "beta"], { stdio: "ignore" });
 await new Promise(r => setTimeout(r, 800));
 const STARTER = process.env.STARTER || "../private/logbook-starter-backup.json";
 const XLSX = "../private/fixtures/plan.xlsx", IMG = "/mnt/user-data/uploads/788a6ce7-image.jpg";
 const out = "tests/shots"; fs.mkdirSync(out, { recursive: true });
 const results = []; const ok = (name, cond) => { results.push([cond ? "PASS" : "FAIL", name]); };
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "en-GB", acceptDownloads: true, colorScheme: "dark" });
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "en-GB", acceptDownloads: true, permissions: ["clipboard-read", "clipboard-write"], colorScheme: "dark" });
 const page = await ctx.newPage();
 const errors = []; page.on("pageerror", e => errors.push(e.message)); page.on("console", m => { if (m.type() === "error") errors.push(m.text()); });
 const shot = n => page.screenshot({ path: `${out}/${n}.png` });
@@ -18,6 +18,23 @@ try {
   await page.goto("http://localhost:8765/");
   await page.waitForSelector("h1:has-text('Welcome')");
   ok("Fresh install shows welcome (no personal data shipped)", true);
+  // ---- guided tutorial on first launch
+  await page.waitForSelector(".tour-card");
+  ok("Tutorial opens on first launch", (await page.textContent(".tour-card h3")).includes("Welcome to Logbook"));
+  await shot("00-tour-welcome");
+  const titles = [];
+  for (let i = 0; i < 12 && !(await page.$('.tour [data-a="tourDo"]')); i++) {
+    await page.click('[data-a="tourNext"]'); await page.waitForTimeout(320);
+    const h = await page.textContent(".tour-card h3"); titles.push(h);
+    if (h.includes("Programs")) { const r = await page.$eval(".tour-hole", e => e.getBoundingClientRect()), b = await page.$eval('.tabbar [data-v="programs"]', e => e.getBoundingClientRect());
+      ok("Spotlight sits on the Programs tab", Math.abs(r.left + 6 - b.left) < 2 && Math.abs(r.top + 6 - b.top) < 2); await shot("00-tour-programs"); }
+    if (h.includes("Back up")) { ok("Backup step explains data lives only on the phone", (await page.textContent(".tour-card")).includes("only on this phone")); await shot("00-tour-backup"); }
+  }
+  ok("Tutorial covers import, training, history, backup, feedback", ["Already have a plan", "While you train", "History", "Back up", "Tell me what to fix", "You're ready"].every(x => titles.some(h => h.includes(x))));
+  await page.click('.tour [data-a="tourEnd"]'); await page.waitForTimeout(200);
+  ok("Explore closes the tutorial", !(await page.$(".tour")));
+  await page.reload(); await page.waitForSelector("h1:has-text('Welcome')"); await page.waitForTimeout(300);
+  ok("Tutorial not shown again after finishing", !(await page.$(".tour")));
   await shot("00-welcome");
   await page.setInputFiles('[data-in="impFile"]', STARTER);
   await page.waitForSelector("h1:has-text('Push')");
@@ -233,7 +250,7 @@ try {
   await shot("12-exercise");
   // export + re-import
   await page.click('[data-a="tab"][data-v="more"]');
-  ok("More shows backup card at the top", (await page.textContent(".scroll .card")).includes("Back up your data"));
+  ok("More shows backup card at the top", (await page.textContent(".scroll .card:not(.betacard)")).includes("Back up your data"));
   await shot("12b-more");
   const [dl] = await Promise.all([page.waitForEvent("download"), page.click('[data-a="exportJson"]')]);
   const path = `${out}/backup.json`; await dl.saveAs(path);
@@ -300,6 +317,37 @@ try {
     const txt = execSync(`tesseract ${out}/prep-js.png - -l ita+eng --psm 6 2>/dev/null`).toString();
     ok("JS image clean-up: OCR finds all 5 day headers", ["LUNED", "MARTED", "GIOVED", "VENERD", "SABATO"].every(d => txt.toUpperCase().includes(d)));
   }
+  // ---- beta label, feedback, program sharing
+  await page.click('[data-a="tab"][data-v="more"]');
+  ok("Beta build is labelled", (await page.textContent("h1")).includes("BETA") && !!(await page.$('[data-a="betaCopy"]')));
+  await page.click('[data-a="openFeedback"]'); await page.click('[data-a="fbKind"][data-v="bug"]');
+  await page.fill('[data-in="fbText"]', "Rest timer froze after locking the phone"); await shot("20-feedback");
+  await page.click('[data-a="fbSend"]'); await page.waitForTimeout(300);
+  const fb = await page.evaluate(() => navigator.clipboard.readText());
+  ok("Feedback message has type, text and diagnostics", fb.startsWith("[Logbook Bug]") && fb.includes("Rest timer froze") && /Logbook \d+\.\d+\.\d+ beta/.test(fb));
+  await page.click('[data-a="tab"][data-v="programs"]'); await page.locator('[data-a="openProgram"]').first().click();
+  const shareName = await page.inputValue("#pname");
+  await page.click('[data-a="programMenu"]'); await page.click('.sheet button:has-text("Share program")');
+  await page.waitForSelector('[data-a="shareSend"]:not([disabled])'); await shot("21-share-sheet");
+  await page.click('[data-a="shareSend"]'); await page.waitForTimeout(300);
+  const shared = await page.evaluate(() => navigator.clipboard.readText());
+  const link = (shared.match(/https?:\S+#share=\S+/) || [""])[0];
+  ok("Share produces a link with the program inside", !!link && shared.includes(shareName));
+  ok("Share link is reasonably short (< 4000 chars)", link.length < 4000); console.log("   share link length", link.length);
+  const nBefore = await page.evaluate(async () => (await (await import("./js/db.js")).all("programs")).length);
+  await page.goto(link); await page.waitForSelector('[data-a="sharedAdd"]');
+  ok("Opening the link shows the program preview", (await page.textContent("h1")).includes(shareName)); await shot("22-shared-preview");
+  ok("Link removed from address bar after opening", !page.url().includes("share="));
+  await page.click('[data-a="sharedAdd"]'); await page.waitForTimeout(300);
+  const nAfter = await page.evaluate(async () => (await (await import("./js/db.js")).all("programs")).length);
+  ok("Shared program added as a new program", nAfter === nBefore + 1 && (await page.textContent(".toast")).includes("Added"));
+  await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="openImport"]');
+  await page.fill('[data-in="impText"]', "look at this " + link); await page.click('[data-a="impReadText"]');
+  await page.waitForSelector('[data-a="sharedAdd"]'); ok("Pasting a share link in Import opens the preview", true);
+  await page.goto("http://localhost:8765/#share=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"); await page.waitForTimeout(500);
+  ok("Broken share link → friendly message", (await page.textContent(".toast")).includes("damaged"));
+  await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="tourStart"]'); await page.waitForSelector(".tour-card");
+  ok("Tutorial can be replayed from More", true); await page.click('.tour [data-a="tourEnd"]');
   // light theme screenshot of workout
   await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="theme"][data-v="light"]'); await page.click('[data-a="tab"][data-v="today"]');
   await page.click('[data-a="start"]'); await page.waitForSelector(".ex-name"); await shot("14-workout-light-it");

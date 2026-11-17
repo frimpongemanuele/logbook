@@ -6,7 +6,13 @@ import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2, fmtRange, O
 import { setsCsv, mergeImport } from "./data.js";
 import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine, readDelimited, dayName } from "./importer.js";
 
-export const VERSION = "0.8.1";
+import { CHANNEL, BUILD_VERSION } from "./channel.js";
+import { pack, unpack, extractCode, toPayload, validPayload, fromPayload } from "./share.js";
+import { matchExercise } from "./importer.js";
+export const VERSION = BUILD_VERSION;
+const isBeta = CHANNEL === "beta";
+const standalone = () => (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || (navigator as Any).standalone === true;
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const DAY = 86_400_000;
 
 type Any = any;
@@ -111,8 +117,9 @@ async function boot() {
     }
     setLang(A.settings.lang as Lang);
     try { A.persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null; } catch { A.persisted = null; }
-    if (activeSession()) { /* resume banner shown on Today */ }
+    if (!A.settings.tourDone && !A.programs.some((p: Any) => p.status !== "deleted") && !A.sessions.length) A.tour = { i: 0 };
     render();
+    await openShareFromHash();
   } catch (err: Any) {
     app.innerHTML = `<div class="scroll"><h1>Storage error</h1><p class="sub">${esc(err && err.message)}</p></div>`;
   }
@@ -265,7 +272,7 @@ function render() {
   else {
     const views: Record<string, (p: Any) => string> = {
       today: vToday, history: vHistory, session: vSession, summary: vSummary, programs: vPrograms, program: vProgram, day: vDay, pe: vPe,
-      library: vLibrary, exercise: vExercise, exform: vExForm, pick: vPick, more: vMore, import: vImport,
+      library: vLibrary, exercise: vExercise, exform: vExForm, pick: vPick, more: vMore, import: vImport, feedback: vFeedback, shared: vShared,
     };
     const fn = views[r.v] || vToday;
     const top = ["today", "history", "programs", "library", "more"];
@@ -276,6 +283,7 @@ function render() {
     h = `<div class="view">${fn(r.p)}</div>${mini}<nav class="tabbar">${tabs}</nav>`;
   }
   if (A.sheet) h += vSheet();
+  if (A.tour) h += vTour();
   if (A.toast) h += `<div class="toast" role="status"><span>${esc(A.toast.msg)}</span>${A.toast.undo ? `<button data-a="undo">${t("undo")}</button>` : ""}</div>`;
   const scroll = app.querySelector(".scroll") as HTMLElement | null;
   const st = scroll ? scroll.scrollTop : 0;
@@ -283,6 +291,7 @@ function render() {
   app.innerHTML = h;
   (app as Any)._view = r.v + JSON.stringify(r.p);
   if (sameView) { const n = app.querySelector(".scroll") as HTMLElement | null; if (n) n.scrollTop = st; }
+  if (A.tour) requestAnimationFrame(placeTour);
 }
 
 /* ---------------- Today ---------------- */
@@ -308,7 +317,7 @@ function vToday() {
   const day = p.days[di];
   if (!day) return h + `<h1>${esc(p.name)}</h1><p class="sub">${t("noProgram")}</p></div>`;
   const nSets = day.exercises.reduce((a: number, e: Any) => a + e.sets.filter(isWork).length, 0);
-  h += `<div class="sub">${t("next")} · ${t("dayOf", { a: di + 1, b: p.days.length })}</div><h1>${esc(nm(day.name))}</h1>
+  h += `<div class="sub">${isBeta ? `<span class="pill betapill">BETA</span> ` : ""}${t("next")} · ${t("dayOf", { a: di + 1, b: p.days.length })}</div><h1>${esc(nm(day.name))}</h1>
     <div class="sub">${day.exercises.length} ${t("exercises")} · ${nSets} ${t("workSets").toLowerCase()}</div>`;
   if (!s) h += `<button class="btn primary block mt16" data-a="start" data-v="${di}">${t("start")}</button>
     <div class="row mt8"><button class="btn ghost flex1" data-a="changeDay">${t("changeDay")}</button><button class="btn ghost flex1" data-a="startEmpty">${t("emptyWorkout")}</button></div>`;
@@ -882,17 +891,182 @@ async function ocrImage(file: File, progress: (msg: string, pct: number) => void
   } finally { await worker.terminate(); }
 }
 
+/* ---------------- Tutorial (spotlight tour) ---------------- */
+type Step = { k: string; tab?: string; target?: string; when?: () => boolean; actions?: boolean };
+const STEPS: Step[] = [
+  { k: "welcome" },
+  { k: "install", when: () => isIOS() && !standalone() },
+  { k: "today", tab: "today", target: '.tabbar [data-v="today"]' },
+  { k: "programs", tab: "programs", target: '.tabbar [data-v="programs"]' },
+  { k: "import", tab: "more", target: '[data-a="openImport"]' },
+  { k: "training" },
+  { k: "history", tab: "history", target: '.tabbar [data-v="history"]' },
+  { k: "backup", tab: "more", target: '.duecard, [data-a="exportJson"]' },
+  { k: "feedback", tab: "more", target: '[data-a="openFeedback"]' },
+  { k: "ready", actions: true },
+];
+const tourSteps = () => STEPS.filter(st => !st.when || st.when());
+function tourGo(d: number) {
+  const steps = tourSteps(); const i = Math.max(0, Math.min(steps.length - 1, A.tour.i + d));
+  A.tour.i = i; const st = steps[i];
+  if (st.tab) A.nav = [{ v: st.tab, p: {} }];
+  render();
+}
+async function endTour() { A.tour = null; A.settings.tourDone = true; await saveSettings(); A.nav = [{ v: "today", p: {} }]; }
+function vTour() {
+  const steps = tourSteps(), i = Math.min(A.tour.i, steps.length - 1), st = steps[i];
+  const dots = steps.map((_, j) => `<i class="${j === i ? "on" : ""}"></i>`).join("");
+  const body = t("tour_" + st.k + "_b").split("\n").map(p => `<p>${p}</p>`).join("");
+  const acts = st.actions
+    ? `<div class="col g8 mt12"><button class="btn primary block" data-a="tourDo" data-v="import">${t("tourImport")}</button><button class="btn ghost block" data-a="tourDo" data-v="program">${t("tourCreate")}</button><button class="btn ghost block" data-a="tourEnd">${t("tourExplore")}</button></div>`
+    : `<div class="row g8 mt12"><button class="btn ghost small" data-a="tourEnd">${t("tourSkip")}</button><span class="flex1"></span>${i > 0 ? `<button class="btn ghost small" data-a="tourBack">${t("back")}</button>` : ""}<button class="btn primary small" data-a="tourNext">${t("tourNextBtn")}</button></div>`;
+  return `<div class="tour" role="dialog" aria-modal="true" aria-label="${t("showTutorial")}"><div class="tour-hole ${st.target ? "" : "none"}"></div>
+    <div class="tour-card"><div class="tour-dots">${dots}</div><h3>${t("tour_" + st.k + "_t")}</h3><div class="tour-body">${body}</div>${acts}</div></div>`;
+}
+function placeTour() {
+  if (!A.tour) return;
+  const st = tourSteps()[Math.min(A.tour.i, tourSteps().length - 1)];
+  const hole = app.querySelector(".tour-hole") as HTMLElement, card = app.querySelector(".tour-card") as HTMLElement;
+  if (!hole || !card) return;
+  const el = st.target ? (app.querySelector(st.target) as HTMLElement | null) : null;
+  if (!el) { hole.classList.add("none"); card.style.top = ""; card.style.bottom = ""; card.classList.add("mid"); return; }
+  el.scrollIntoView({ block: "nearest" });
+  const r = el.getBoundingClientRect(), pad = 6;
+  Object.assign(hole.style, { left: r.left - pad + "px", top: r.top - pad + "px", width: r.width + pad * 2 + "px", height: r.height + pad * 2 + "px" });
+  hole.classList.remove("none"); card.classList.remove("mid");
+  if (r.top > window.innerHeight / 2) { card.style.top = ""; card.style.bottom = window.innerHeight - r.top + 16 + "px"; }
+  else { card.style.bottom = ""; card.style.top = r.bottom + 16 + "px"; }
+}
+window.addEventListener("resize", () => { if (A.tour) placeTour(); });
+
+/* ---------------- Feedback ---------------- */
+function diagText() {
+  const ua = navigator.userAgent;
+  const dev = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : "Desktop";
+  const os = (ua.match(/OS (\d+[_.]\d+)/) || ua.match(/Android (\d+(\.\d+)?)/) || [])[1]?.replace("_", ".") || "";
+  return `Logbook ${VERSION}${isBeta ? " beta" : ""} · ${dev}${os ? " " + os : ""} · ${standalone() ? "app" : "browser"} · ${L()} · ${window.innerWidth}×${window.innerHeight}`;
+}
+function vFeedback() {
+  const f = A.fb || (A.fb = { kind: "idea", text: "", diag: true });
+  return header(t("sendFeedback")) + `<div class="scroll"><p class="sub">${t("fbIntro")}</p>
+    <div class="seg mt12">${["bug", "idea", "other"].map(k => `<button class="${f.kind === k ? "on" : ""}" data-a="fbKind" data-v="${k}">${t("fb_" + k)}</button>`).join("")}</div>
+    <label class="lbl" for="fbt">${t("fbMessage")}</label><textarea id="fbt" class="inp" rows="7" data-in="fbText" placeholder="${esc(t("fbPh_" + f.kind))}">${esc(f.text)}</textarea>
+    <label class="toggle mt8"><input type="checkbox" ${f.diag ? "checked" : ""} data-a="fbDiag"> ${t("fbDiag")}</label>
+    ${f.diag ? `<p class="faint small">${esc(diagText())}</p>` : ""}
+    <button class="btn primary block mt12" data-a="fbSend">${t("fbSend")}</button>
+    <p class="faint small mt8">${t("fbHow")}</p></div>`;
+}
+async function sendFeedback() {
+  const f = A.fb; const text = (f.text || "").trim();
+  if (!text) { toast(t("fbEmpty")); render(); return; }
+  const msg = `[Logbook ${t("fb_" + f.kind)}]\n${text}${f.diag ? "\n\n— " + diagText() : ""}`;
+  const nav: Any = navigator;
+  try { if (nav.share) { await nav.share({ text: msg }); A.fb = null; toast(t("fbThanks")); back(); return; } } catch (e: Any) { if (e && e.name === "AbortError") return; }
+  try { await navigator.clipboard.writeText(msg); toast(t("fbCopied")); } catch { toast(t("copyFailed")); }
+  render();
+}
+
+/* ---------------- Program sharing ---------------- */
+const appBase = () => location.origin + location.pathname.replace(/[^/]*$/, "");
+async function buildShareLink() {
+  const p = findProg(A.share.id);
+  const code = await pack(toPayload(p, A.lib, A.share.withLoads));
+  A.share.link = appBase() + "#share=" + code;
+  render();
+}
+async function shareProgram(p: Any) {
+  A.share = { id: p.id, withLoads: false, link: null };
+  A.sheet = { kind: "share" }; render(); await buildShareLink();
+}
+async function sendShare() {
+  const p = findProg(A.share.id), link = A.share.link; if (!link) return;
+  const text = t("shareText", { x: p.name });
+  const nav: Any = navigator;
+  try { if (nav.share) { await nav.share({ title: p.name, text, url: link }); A.sheet = null; render(); return; } } catch (e: Any) { if (e && e.name === "AbortError") return; }
+  try { await navigator.clipboard.writeText(text + "\n" + link); toast(t("linkCopied")); } catch { toast(t("copyFailed")); }
+  A.sheet = null; render();
+}
+async function openShareFromHash() {
+  const code = extractCode(location.hash);
+  if (!code) return;
+  history.replaceState(null, "", location.pathname + location.search);   // don't re-import on reload
+  await openShared(code, false);
+}
+window.addEventListener("hashchange", () => { openShareFromHash(); });
+async function openShared(code: string, pasted: boolean) {
+  try {
+    const o = await unpack(code);
+    if (!validPayload(o)) throw new Error("bad");
+    A.shared = { payload: o, code, makeActive: !activeProgram(), here: pasted || standalone() || !isIOS() };
+    A.nav = [{ v: "today", p: {} }, { v: "shared", p: {} }]; A.tour = null; render();
+  } catch { toast(t("shareBad")); render(); }
+}
+function vShared() {
+  const sh = A.shared; if (!sh) return header("");
+  const o = sh.payload, link = appBase() + "#share=" + sh.code;
+  const name = (x: string, xn: string) => (A.lib.has(x) ? exName(x) : o.cx?.[x] ? nm(o.cx[x].n) : xn);
+  let h = header(t("sharedT")) + `<div class="scroll"><p class="sub">${t("sharedIntro")}</p><h1 class="mt8">${esc(o.n)}</h1>`;
+  if (!sh.here) {
+    // opened in Safari: on iPhone the Home Screen app keeps separate data, so guide the user there
+    return h + `<div class="card betacard mt12"><b>${t("openInApp")}</b>
+      <ol class="sub small steps"><li>${t("openInApp1")}</li><li>${t("openInApp2")}</li><li>${t("openInApp3")}</li></ol>
+      <button class="btn primary block mt8" data-a="copyLink" data-link="${esc(link)}">${t("copyLinkBtn")}</button>
+      <button class="btn ghost block mt8" data-a="sharedHere">${t("importHere")}</button></div></div>`;
+  }
+  h += o.d.map((d: Any) => `<div class="card"><b>${esc(d.n)}</b>${d.e.map((e: Any) => `<div class="li"><span>${esc(name(e.x, e.xn))}</span><span class="muted num small r">${e.s.length} × ${e.s[0] && e.s[0][5] != null ? fmt(e.s[0][5]) + " min" : fmtRange(e.s[0]?.[2] ?? 0, e.s[0]?.[3] ?? null)}</span></div>`).join("")}</div>`).join("");
+  h += `<p class="faint small">${o.w ? t("sharedWithLoads") : t("sharedNoLoads")}</p>
+    <label class="toggle"><input type="checkbox" ${sh.makeActive ? "checked" : ""} data-in="sharedActive"> ${t("makeActive")}</label>
+    <button class="btn primary block mt8" data-a="sharedAdd">${t("addProgram")}</button></div>`;
+  return h;
+}
+async function addShared() {
+  const sh = A.shared;
+  const libArr = [...A.lib.values()];
+  const { program, created } = fromPayload(sh.payload, A.lib, now(), n => { const m = matchExercise(n, libArr); return m.score >= 0.9 ? m.id : null; });
+  for (const ex of created) await saveExercise(ex);
+  if (sh.makeActive) { for (const q of A.programs) if (q.status === "active") { q.status = "inactive"; await saveProgram(q); } program.status = "active"; }
+  await saveProgram(program); A.programs.push(program); A.shared = null;
+  toast(t("sharedAdded", { x: program.name }));
+  A.nav = [{ v: "programs", p: {} }, { v: "program", p: { id: program.id } }]; render();
+}
+
+/* ---------------- Beta: copy the main app's data in (one way) ---------------- */
+function noLive() { confirmSheet(t("betaCopy"), t("betaNoLive"), "OK", false, () => {}); }
+async function copyLiveIntoBeta() {
+  const dbs = (indexedDB as Any).databases ? await (indexedDB as Any).databases() : null;
+  if (dbs && !dbs.some((d: Any) => d.name === "logbook")) { return noLive(); }
+  const live: IDBDatabase = await new Promise((res, rej) => {
+    const r = indexedDB.open("logbook");
+    r.onupgradeneeded = () => { r.transaction!.abort(); };          // never create the main database from here
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }).catch(() => null) as Any;
+  if (!live) { return noLive(); }
+  const read = (st: string) => new Promise<Any[]>(res => { try { const q = live.transaction(st).objectStore(st).getAll(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); } catch { res([]); } });
+  const [ex, pr, se] = [await read("exercises"), await read("programs"), await read("sessions")];
+  live.close();
+  if (!pr.length && !se.length) return noLive();
+  await db.clearAll();
+  await db.putMany("exercises", ex); await db.putMany("programs", pr); await db.putMany("sessions", se);
+  A.lib = new Map(ex.map((e: Any) => [e.id, e])); A.programs = pr; A.sessions = se;
+  await migrateData();
+  toast(t("betaCopied", { n: se.length })); A.nav = [{ v: "today", p: {} }]; render();
+}
+
 /* ---------------- More ---------------- */
 function vMore() {
   const disc = A.sessions.filter((s: Any) => s.status === "discarded").sort((a: Any, b: Any) => b.startedAt - a.startedAt);
   const lb = A.settings.lastBackupAt, due = backupDue();
   const delP = A.programs.filter((p: Any) => p.status === "deleted");
   const delEx = [...A.lib.values()].filter((e: Any) => e.archived).sort((a: Any, b: Any) => nm(a.name).localeCompare(nm(b.name), locale()));
-  return `<div class="scroll"><h1>${t("more")}</h1>
+  return `<div class="scroll"><h1>${t("more")}${isBeta ? ` <span class="pill betapill">BETA</span>` : ""}</h1>
+    ${isBeta ? `<div class="card betacard"><b>${t("betaTitle")}</b><p class="sub small mt4">${t("betaBody")}</p><button class="btn ghost small mt8" data-a="betaCopy">${t("betaCopy")}</button></div>` : ""}
     <div class="card ${due ? "duecard" : ""}"><div class="row g8"><span class="flex1"><b>${t("backupShort")}</b><span class="sub small block">${t("lastBackup", { d: lb ? dstr(lb) : t("never") })}${due ? " · " + t("backupDueShort") : ""}</span></span>
       <button class="btn ${due ? "primary" : "ghost"} small" data-a="exportJson">${t("backupNow")}</button></div><p class="sub small mt8">${t("backupHelp")}</p></div>
     <h2>${t("importT")}</h2>
     <button class="btn primary block" data-a="openImport">${t("importPlan")}</button>
+    <h2>${t("helpT")}</h2>
+    <button class="btn ghost block" data-a="openFeedback">${t("sendFeedback")}</button>
+    <button class="btn ghost block mt8" data-a="tourStart">${t("showTutorial")}</button>
     <h2>${t("language")}</h2><div class="seg"><button class="${L() === "en" ? "on" : ""}" data-a="lang" data-v="en">English</button><button class="${L() === "it" ? "on" : ""}" data-a="lang" data-v="it">Italiano</button></div>
     <h2>${t("theme")}</h2><div class="seg">${["system", "light", "dark"].map(k => `<button class="${(A.settings.theme || "system") === k ? "on" : ""}" data-a="theme" data-v="${k}">${t(k)}</button>`).join("")}</div>
     <h2>${t("data")}</h2>
@@ -902,7 +1076,7 @@ function vMore() {
     ${delP.length ? `<h2>${t("deletedPrograms")}</h2><div class="card">${delP.map((p: Any) => `<div class="li"><span class="flex1">${esc(p.name)}</span><button class="btn ghost small" data-a="progRestore" data-id="${p.id}">${t("restore")}</button><button class="iconbtn danger" data-a="progPurge" data-id="${p.id}" aria-label="${t("deleteForever")}">${I.x}</button></div>`).join("")}</div>` : ""}
     ${delEx.length ? `<h2>${t("deletedEx")}</h2><div class="card">${delEx.map((e: Any) => `<div class="li"><span>${esc(nm(e.name))}</span><button class="btn ghost small" data-a="restoreEx" data-id="${e.id}">${t("restore")}</button></div>`).join("")}</div>` : ""}
     <h2>${t("storage")}</h2><div class="card"><div class="sub">${A.persisted ? t("persisted") : t("notPersisted")}</div><div class="sub mt8">${t("installHint")}</div></div>
-    <p class="faint small c mt16">Logbook ${VERSION}</p></div>`;
+    <p class="faint small c mt16">Logbook ${VERSION}${isBeta ? " · beta" : ""}</p></div>`;
 }
 
 /* ---------------- Sheets ---------------- */
@@ -923,6 +1097,12 @@ function vSheet() {
   } else if (sh.kind === "confirm") {
     inner = `<h3>${esc(sh.title)}</h3><p class="sub">${esc(sh.body)}</p><div class="row g8"><button class="btn ghost flex1" data-a="closeSheet">${t("cancel")}</button>
       <button class="btn ${sh.danger ? "ghost danger" : "primary"} flex1" data-a="confirmOk">${esc(sh.okLabel)}</button></div>`;
+  } else if (sh.kind === "share") {
+    const p = findProg(A.share.id);
+    inner = `<h3>${t("shareProgram")}</h3><p class="sub small">${t("shareIntro", { x: esc(p.name) })}</p>
+      <label class="toggle mt8"><input type="checkbox" ${A.share.withLoads ? "checked" : ""} data-a="shareLoads"> ${t("shareWithLoads")}</label>
+      <button class="btn primary block mt8" data-a="shareSend" ${A.share.link ? "" : "disabled"}>${A.share.link ? t("shareSendBtn") : t("preparing")}</button>
+      ${A.share.link ? `<p class="faint small mt8">${t("shareLen", { n: A.share.link.length })}</p>` : ""}`;
   } else if (sh.kind === "rest") {
     const n = Math.max(0, Math.round(parseFloat(sh.val) || 0));
     inner = `<h3>${esc(sh.title)}</h3><div class="bigval num">${clock(n * 1000)}<small> (${n} ${t("sec")})</small></div>
@@ -1147,7 +1327,23 @@ app.addEventListener("click", async ev => {
       case "exMetric": A.exMetric = v; break;
       case "histM": A.histM = v; break;
       case "openImport": A.imp = null; go("import", {}); return;
-      case "impReadText": { const txt = A.impText || ""; if (!txt.trim()) break; try { if (JSON.parse(txt)?.app === "logbook") { await importFile(new File([txt], "backup.json")); return; } } catch { }
+      case "openFeedback": A.fb = { kind: "idea", text: "", diag: true }; go("feedback", {}); return;
+      case "fbKind": A.fb.kind = v; break;
+      case "fbDiag": A.fb.diag = !A.fb.diag; break;
+      case "fbSend": await sendFeedback(); return;
+      case "tourStart": A.tour = { i: 0 }; A.nav = [{ v: "today", p: {} }]; break;
+      case "tourNext": tourGo(1); return;
+      case "tourBack": tourGo(-1); return;
+      case "tourEnd": await endTour(); break;
+      case "tourDo": { await endTour(); if (v === "import") { A.imp = null; A.nav = [{ v: "more", p: {} }, { v: "import", p: {} }]; } else if (v === "program") { A.nav = [{ v: "programs", p: {} }]; } break; }
+      case "betaCopy": confirmSheet(t("betaCopyQ"), t("betaCopyBody"), t("betaCopyOk"), true, copyLiveIntoBeta); return;
+      case "shareSend": await sendShare(); return;
+      case "shareLoads": A.share.withLoads = !A.share.withLoads; A.share.link = null; await buildShareLink(); return;
+      case "sharedAdd": await addShared(); return;
+      case "sharedHere": A.shared.here = true; break;
+      case "copyLink": { try { await navigator.clipboard.writeText(el.dataset.link || ""); toast(t("linkCopied")); } catch { toast(t("copyFailed")); } break; }
+      case "impReadText": { const txt = A.impText || ""; if (!txt.trim()) break;
+        const code = extractCode(txt); if (code) { A.impText = ""; await openShared(code, true); return; } try { if (JSON.parse(txt)?.app === "logbook") { await importFile(new File([txt], "backup.json")); return; } } catch { }
         showParsed(parseAny(txt), ""); return; }
       case "impReset": A.imp = { stage: "input" }; break;
       case "impDel": A.imp.days[+v].items.splice(+d.i!, 1); break;
@@ -1223,6 +1419,7 @@ function programActions(p: Any, inDetail: boolean) {
   menu(p.name, [
     ...(p.status !== "active" && p.status !== "archived" ? [{ label: t("makeActive"), on: () => activateProgram(p) }] : []),
     ...(!inDetail ? [{ label: t("edit"), on: () => go("program", { id: p.id }) }] : []),
+    { label: t("shareProgram"), on: () => shareProgram(p) },
     { label: t("duplicate"), on: async () => { const c = await duplicateProgram(p); go("program", { id: c.id }); } },
     p.status === "archived" ? { label: t("unarchive"), on: async () => { p.status = "inactive"; await saveProgram(p); } }
       : { label: t("archive"), on: async () => { p.status = "archived"; await saveProgram(p); if (inDetail) back(); } },
@@ -1301,6 +1498,7 @@ app.addEventListener("input", ev => {
   const el = ev.target as HTMLInputElement; const k = el.dataset?.in; if (!k) return;
   const d = el.dataset;
   if (k === "impText") { A.impText = el.value; return; }
+  if (k === "fbText") { A.fb.text = el.value; return; }
   if (k === "libQ") { A.q = el.value; const pos = el.selectionStart; render(); const n = app.querySelector(".search") as HTMLInputElement; if (n) { n.focus(); n.setSelectionRange(pos, pos); } return; }
   if (k === "fName") { A.form.name[d.v!] = el.value; return; }
   if (k === "fInc") { A.form.inc = parseFloat(el.value.replace(",", ".")) || 0; return; }
@@ -1317,6 +1515,7 @@ app.addEventListener("change", async ev => {
   if (k === "impFile" && el.files && el.files[0]) { const f = el.files[0]; el.value = ""; await handleImportFile(f); return; }
   if (k === "impName") { A.imp.name = el.value; return; }
   if (k === "impActive") { A.imp.makeActive = el.checked; return; }
+  if (k === "sharedActive") { A.shared.makeActive = el.checked; return; }
   if (k === "impDay") { A.imp.days[+d.v!].name = el.value; return; }
   if (k === "impDate") { A.imp.sessions[+d.v!].date = el.value || null; return; }
   if (k === "fEq") { A.form.equipment = el.value; return; }

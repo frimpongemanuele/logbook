@@ -3,12 +3,14 @@
 import { createRequire } from "module"; import { execSync, spawn } from "child_process";
 const require = createRequire(import.meta.url);
 const { chromium } = require(execSync("npm root -g").toString().trim() + "/playwright");
-const srv = spawn("python3", ["-m", "http.server", "8771", "-d", "public"], { stdio: "ignore" });
+const srv = spawn("python3", ["-m", "http.server", "8771", "-d", process.env.SITE || "beta"], { stdio: "ignore" });
 await new Promise(r => setTimeout(r, 700));
+const DBN = (process.env.SITE || "beta") === "beta" ? "logbook-beta" : "logbook";
 const b = await chromium.launch(); const page = await (await b.newContext()).newPage();
+await page.addInitScript(n => { window.DBN = n; }, DBN);
 await page.goto("http://localhost:8771/manifest.webmanifest");
 await page.evaluate(() => new Promise(res => {
-  const r = indexedDB.open("logbook", 1);
+  const r = indexedDB.open(DBN, 1);
   r.onupgradeneeded = () => { const d = r.result; for (const n of ["exercises", "programs", "meta"]) d.createObjectStore(n, { keyPath: n === "meta" ? "key" : "id" }); const s = d.createObjectStore("sessions", { keyPath: "id" }); s.createIndex("startedAt", "startedAt"); s.createIndex("status", "status"); };
   r.onsuccess = () => {
     const tx = r.result.transaction(["exercises", "programs", "sessions"], "readwrite");
@@ -26,7 +28,7 @@ await page.evaluate(() => new Promise(res => {
   };
 }));
 await page.goto("http://localhost:8771/"); await page.waitForTimeout(900);
-const db = await page.evaluate(() => new Promise(res => { const r = indexedDB.open("logbook"); r.onsuccess = () => { const out = {}; const tx = r.result.transaction(["exercises", "programs", "sessions"]); let n = 0;
+const db = await page.evaluate(() => new Promise(res => { const r = indexedDB.open(DBN); r.onsuccess = () => { const out = {}; const tx = r.result.transaction(["exercises", "programs", "sessions"]); let n = 0;
   for (const st of ["exercises", "programs", "sessions"]) { const q = tx.objectStore(st).getAll(); q.onsuccess = () => { out[st] = q.result; if (++n === 3) res(out); }; } }; }));
 const p = db.programs[0], [lat, bench, row] = p.days[0].exercises, w = db.sessions[0];
 const check = (name, cond) => console.log((cond ? "PASS  " : "FAIL  ") + name);
@@ -36,6 +38,6 @@ check("Day name 'Ese 5abato (…)' → 'Sabato (Pull B - Spessore)'", p.days[0].
 check("Custom 'Row presa singola' merged into Single-Arm Cable Row (program + history)", row.exId === "ex_sarow" && w.exercises[1].exId === "ex_sarow" && db.exercises.find(e => e.id === "ex_c_row").archived);
 check("Custom 'Rope jumping' merged into Jump Rope with its history", w.exercises[0].exId === "ex_rope" && db.exercises.find(e => e.id === "ex_c_rope").mergedInto === "ex_rope");
 await page.reload(); await page.waitForTimeout(700);
-const p2 = await page.evaluate(() => new Promise(res => { const r = indexedDB.open("logbook"); r.onsuccess = () => { const q = r.result.transaction("programs").objectStore("programs").getAll(); q.onsuccess = () => res(q.result[0]); }; }));
+const p2 = await page.evaluate(() => new Promise(res => { const r = indexedDB.open(DBN); r.onsuccess = () => { const q = r.result.transaction("programs").objectStore("programs").getAll(); q.onsuccess = () => res(q.result[0]); }; }));
 check("Second launch changes nothing more (idempotent)", JSON.stringify(p2.days) === JSON.stringify(p.days));
 await b.close(); srv.kill();

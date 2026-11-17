@@ -1,4 +1,7 @@
 name: Deploy to GitHub Pages
+# Site = public/ (live app, /logbook/) + beta/ (test app, /logbook/beta/). Both are committed build outputs:
+#   node scripts/build.mjs beta   → rebuild the test app
+#   node scripts/build.mjs live   → promote the current source to the live app
 on:
   push: { branches: [main] }
   workflow_dispatch:
@@ -12,10 +15,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npx --yes -p typescript@7.0.2 tsc -p .
+      - run: npx --yes -p typescript@7.0.2 tsc -p . --noEmit
       - run: node --test tests/*.test.mjs
+      - name: Assemble site
+        run: |
+          mkdir -p _site && cp -r public/. _site/ && mkdir -p _site/beta && cp -r beta/. _site/beta/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
-        with: { path: public }
+        with: { path: _site }
       - id: deploy
         uses: actions/deploy-pages@v4

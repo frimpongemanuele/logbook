@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseReps, parseRest, parseExerciseLine, parseAny, parseLog, readXlsx, matchExercise, matchAll, buildProgramFromPlan, buildSessionsFromLog, dayName, cleanLine, schemeOf } from "../public/js/importer.js";
-import { seedExercises } from "../public/js/seed.js";
-import { suggest, fmtRange } from "../public/js/domain.js";
+import { parseReps, parseRest, parseExerciseLine, parseAny, parseLog, readXlsx, matchExercise, matchAll, buildProgramFromPlan, buildSessionsFromLog, dayName, cleanLine, schemeOf } from "../beta/js/importer.js";
+import { seedExercises } from "../beta/js/seed.js";
+import { suggest, fmtRange } from "../beta/js/domain.js";
 
 const lib = seedExercises(0); const libMap = new Map(lib.map(e => [e.id, e]));
 const nm = id => libMap.get(id)?.name.en ?? null;

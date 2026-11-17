@@ -1,6 +1,9 @@
 // Minimal IndexedDB wrapper. Every write resolves only after the transaction commits.
 
-const DB_NAME = "logbook";
+import { CHANNEL } from "./channel.js";
+
+// The beta keeps its own database so testing never touches the real one (same origin as live).
+export const DB_NAME = CHANNEL === "beta" ? "logbook-beta" : "logbook";
 const DB_VERSION = 1;
 export const STORES = ["exercises", "programs", "sessions", "meta"] as const;
 export type Store = typeof STORES[number];

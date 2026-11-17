@@ -1,0 +1,28 @@
+// Live + beta on one origin, like GitHub Pages. Run: node tests/coexist.mjs (after assembling .build/site/logbook{,/beta})
+import { createRequire } from "module"; import { execSync, spawn } from "child_process";
+const require = createRequire(import.meta.url);
+const { chromium } = require(execSync("npm root -g").toString().trim() + "/playwright");
+const srv = spawn("python3", ["-m", "http.server", "8790", "-d", ".build/site"], { stdio: "ignore" });
+await new Promise(r => setTimeout(r, 800));
+const ok = (n, c) => console.log(c ? "PASS" : "FAIL", n);
+const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, locale: "en-GB" }); const page = await ctx.newPage();
+const errs = []; page.on("pageerror", e => errs.push(e.message));
+const U = "http://localhost:8790/logbook/";
+await page.goto(U); await page.waitForSelector("h1");
+await page.setInputFiles('[data-in="impFile"]', process.env.STARTER || "../private/logbook-starter-backup.json"); await page.waitForSelector("h1:has-text('Push')");
+await page.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
+await page.reload(); await page.waitForSelector("h1:has-text('Push')");
+ok("Live app runs with patched worker", !!(await page.evaluate(() => navigator.serviceWorker.controller)));
+await page.goto(U + "beta/"); await page.waitForSelector(".tour-card");
+ok("Beta starts empty with its own data + tutorial", (await page.textContent("h1")).includes("Welcome"));
+await page.click('.tour [data-a="tourEnd"]');
+await page.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
+ok("Beta has its own worker scope", (await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).scope)).endsWith("/logbook/beta/"));
+await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="betaCopy"]'); await page.click('[data-a="confirmOk"]');
+await page.waitForTimeout(800); ok("Copy from main app fills beta", (await page.textContent("h1")).includes("Push") && (await page.textContent(".toast")).includes("Copied"));
+await page.goto(U); await page.waitForSelector("h1:has-text('Push')");
+ok("Live untouched (no beta label, data intact)", !(await page.$(".betapill")) && !(await page.evaluate(() => indexedDB.databases())).every(d => d.name !== "logbook"));
+const keys = await page.evaluate(() => caches.keys()); console.log("   caches:", keys.join(", "));
+ok("Live and beta caches coexist", keys.some(k => k.startsWith("logbook-live-")) && keys.some(k => k.startsWith("logbook-beta-")));
+ok("No page errors", errs.length === 0); if (errs.length) console.log(errs);
+await b.close(); srv.kill();
