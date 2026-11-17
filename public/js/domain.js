@@ -53,6 +53,10 @@ export function suggest(sets, inc) {
     const loads = ws.map(s => s.load);
     const base = { kind: "hold", loads, adj, setNo: null, limitAdj: null, limitTarget: null, harder: false, unknownEffort, inc, predicted: null, predRir: null };
     const allTop = ws.every((s, i) => adj[i] >= s.t.repsMax);
+    if (allTop && !(inc > 0)) {
+        // nothing to add load with (bodyweight / no step): progress by raising the rep target instead
+        return { ...base, kind: "reps", setNo: null, limitAdj: null, limitTarget: null, topNoLoad: true };
+    }
     if (allTop) {
         const twoSteps = ws.every((s, i) => adj[i] >= s.t.repsMax + 2);
         let step = inc;

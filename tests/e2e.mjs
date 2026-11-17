@@ -5,10 +5,11 @@ const { chromium } = require(execSync("npm root -g").toString().trim() + "/playw
 const srv = spawn("python3", ["-m", "http.server", "8765", "-d", "public"], { stdio: "ignore" });
 await new Promise(r => setTimeout(r, 800));
 const STARTER = process.env.STARTER || "../private/logbook-starter-backup.json";
+const XLSX = "../private/fixtures/plan.xlsx", IMG = "/mnt/user-data/uploads/788a6ce7-image.jpg";
 const out = "tests/shots"; fs.mkdirSync(out, { recursive: true });
 const results = []; const ok = (name, cond) => { results.push([cond ? "PASS" : "FAIL", name]); };
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "en-GB", acceptDownloads: true });
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "en-GB", acceptDownloads: true, colorScheme: "dark" });
 const page = await ctx.newPage();
 const errors = []; page.on("pageerror", e => errors.push(e.message)); page.on("console", m => { if (m.type() === "error") errors.push(m.text()); });
 const shot = n => page.screenshot({ path: `${out}/${n}.png` });
@@ -18,7 +19,7 @@ try {
   await page.waitForSelector("h1:has-text('Welcome')");
   ok("Fresh install shows welcome (no personal data shipped)", true);
   await shot("00-welcome");
-  await page.setInputFiles('[data-in="importFile"]', STARTER);
+  await page.setInputFiles('[data-in="impFile"]', STARTER);
   await page.waitForSelector("h1:has-text('Push')");
   ok("Starter backup import loads program", (await page.textContent(".toast")).includes("added"));
   ok("Today shows next day Push from rotation", true);
@@ -38,6 +39,14 @@ try {
   await page.waitForTimeout(250); ok("Set 1 ticked with 10 reps", (await cells())[0][1] === "10" && await page.$eval(".set", e => e.classList.contains("done")));
   ok("Rest timer started (3:00 for bench)", /2:5\d|3:00/.test(await page.textContent("[data-restbar] .t")));
   await shot("04-rest");
+  const restSecs = async () => { const t = (await page.textContent("[data-restbar] .t")).trim(); const [m, x] = t.split(":").map(Number); return m * 60 + x; };
+  const r0 = await restSecs(); await page.click('[data-a="restMinus"]'); await page.waitForTimeout(150);
+  ok("Rest −30s", r0 - (await restSecs()) >= 29);
+  await page.click('[data-a="restEdit"]'); await page.waitForSelector('[data-a="restAlways"]');
+  await page.click('[data-a="kKey"][data-v="C"]'); await page.click('[data-a="kKey"][data-v="9"]'); await page.click('[data-a="kKey"][data-v="0"]');
+  await shot("04c-rest-edit");
+  await page.click('[data-a="restAlways"]'); await page.waitForTimeout(200);
+  ok("Rest edited to 90s and saved for the exercise", (await restSecs()) <= 90 && (await page.textContent(".toast")).includes("90s") && (await page.textContent(".ex-meta")).includes("90s"));
   // crash: reload mid-workout
   await page.reload(); await page.waitForSelector(".bar-card.hot");
   ok("After reload: compact resume bar on Today", (await page.textContent(".bar-card.hot")).includes("Workout in progress"));
@@ -83,23 +92,32 @@ try {
   await page.click('[data-a="picked"]'); await page.waitForSelector(".ex-name");
   ok("Substitution shows new name + replaces note", (await page.textContent(".ex-name")).includes("Incline Dumbbell") && (await page.textContent(".note")).includes("Incline Smith"));
   await shot("06-substitute");
+  // cardio: add Jump Rope (reps only) and Treadmill (minutes)
+  for (const q of ["jump rope", "treadmill"]) {
+    await page.click('[data-a="addToWorkout"]'); await page.fill(".search", q); await page.click('[data-a="picked"]'); await page.waitForSelector(".ex-name");
+  }
+  ok("Treadmill row shows minutes, no kg/RIR", (await page.$$eval(".set", els => els[0].querySelectorAll(".cell").length)) === 1 && (await page.textContent(".sets-head")).includes("Minutes"));
+  await page.locator(".set").nth(0).locator('[data-f="mins"]').click(); await page.click('[data-a="kKey"][data-v="2"]'); await page.click('[data-a="kKey"][data-v="0"]'); await page.click('[data-a="kOk"]');
+  await page.locator(".set").nth(0).locator('[data-a="check"]').click(); await page.waitForTimeout(150);
+  await shot("06b-cardio-time");
+  await page.click('#strip button:has-text("Jump Rope")'); await page.waitForTimeout(150);
+  ok("Jump Rope row shows reps only", (await page.$$eval(".set", els => els[0].querySelectorAll(".cell").length)) === 1 && !(await page.textContent(".ex-meta")).includes("kg"));
+  await page.locator(".set").nth(0).locator('[data-f="reps"]').click(); for (const ch of "100") await page.click(`[data-a="kKey"][data-v="${ch}"]`); await page.click('[data-a="kOk"]');
+  await page.locator(".set").nth(0).locator('[data-a="check"]').click(); await page.waitForTimeout(150);
   // finish
   await page.click('[data-a="askFinish"]'); await page.click('[data-a="confirmOk"]');
   await page.waitForSelector("h1:has-text('Workout complete')");
   const sum = await page.textContent(".scroll");
   ok("Summary: bench suggestion 82.5 / 87.5 / 92.5", sum.includes("Increase load") && sum.includes("82.5 / 87.5 / 92.5"));
+  ok("No load suggestion for cardio; cardio line shown", !sum.includes("Jump Rope") && !sum.includes("Treadmill") && sum.includes("Cardio: 20 min · 100 reps"));
   await shot("07-summary");
   await page.click('[data-a="sgAccept"]');
   await page.waitForTimeout(250); ok("Accepted suggestion", (await page.textContent(".scroll")).includes("Accepted"));
   await tapText("Done");
   await page.waitForSelector("h1");
   ok("Rotation advanced to Pull", (await page.textContent("h1")) === "Pull");
-  ok("Backup bar collapsed by default (< 80px)", (await page.$eval(".bar-card", e => e.getBoundingClientRect().height)) < 80);
-  await page.click('[data-a="toggleBackup"]'); await page.waitForTimeout(150);
-  ok("Backup bar expands on tap", !!(await page.$(".expl")));
-  await shot("07b-today-backup-open");
-  await page.click('[data-a="toggleBackup"]'); await page.waitForTimeout(150);
-  ok("Backup bar collapses again", !(await page.$(".expl")));
+  ok("No backup prompt on Today", !(await page.$('[data-a="exportJson"]')));
+  ok("More tab shows a backup-due dot", !!(await page.$(".tabbar .badge-dot")));
   // program updated
   await page.click('[data-a="tab"][data-v="programs"]'); await page.click('[data-a="openProgram"]'); await page.click('[data-a="openDay"][data-v="0"]');
   ok("Program Push now starts 82.5×8", (await page.textContent(".scroll")).includes("82.5×8"));
@@ -114,12 +132,20 @@ try {
   await dragHandle(0, 4);
   ok("Program drag back restores order", JSON.stringify(await names()) === JSON.stringify(before));
   await shot("08-day");
-  await page.click('[data-a="openPe"][data-v="0"]'); await page.click('[data-a="tplAdd"]');
+  await page.click('[data-a="openPe"][data-v="0"]');
+  ok("Rest saved to the program exercise (90 s)", (await page.textContent(".scroll")).includes("90 s"));
+  await page.click('[data-a="tplAdd"]');
   await page.waitForTimeout(250); ok("Template editor: added a 4th set", (await page.$$(".tpl")).length === 4);
   await shot("09-pe");
   // history
   await page.click('[data-a="tab"][data-v="history"]'); await shot("10-history");
   ok("History lists 7 sessions (6 imported + today)", (await page.$$('[data-a="openSession"]')).length === 7);
+  ok("History progress chart with exercise picker", !!(await page.$('select[data-in="histEx"]')) && !!(await page.$(".scroll .chart")));
+  await page.selectOption('select[data-in="histEx"]', "ex_bench"); await page.click('[data-a="histM"][data-v="top"]'); await page.waitForTimeout(150);
+  ok("Bench top weight trend: 90 → 90 kg (±0)", (await page.textContent(".delta")).includes("±0 kg"));
+  await page.click('[data-a="histM"][data-v="e1rm"]'); await page.waitForTimeout(150);
+  ok("Bench e1RM trend: +7 kg (110.5 → 117)", (await page.textContent(".delta")).includes("+7 kg"));
+  await shot("10b-history-chart");
   await page.click('[data-a="openSession"]'); await shot("11-session");
   // library + exercise detail
   await page.click('[data-a="tab"][data-v="library"]'); await page.fill(".search", "panca piana"); 
@@ -129,15 +155,21 @@ try {
   await shot("12-exercise");
   // export + re-import
   await page.click('[data-a="tab"][data-v="more"]');
+  ok("More shows backup card at the top", (await page.textContent(".scroll .card")).includes("Back up your data"));
+  await shot("12b-more");
   const [dl] = await Promise.all([page.waitForEvent("download"), page.click('[data-a="exportJson"]')]);
   const path = `${out}/backup.json`; await dl.saveAs(path);
   const bk = JSON.parse(fs.readFileSync(path, "utf8"));
   ok("Backup contains 7 completed sessions", bk.sessions.filter(s => s.status === "completed").length === 7);
-  await page.setInputFiles('[data-in="importFile"]', path); await page.waitForSelector(".toast:has-text('Import')");
+  await page.setInputFiles('[data-in="impFile"]', path); await page.waitForSelector(".toast:has-text('Import')");
   ok("Re-import adds nothing (no duplicates)", (await page.textContent(".toast")).includes("0 added"));
   const [dl2] = await Promise.all([page.waitForEvent("download"), page.click('[data-a="exportCsv"]')]);
   await dl2.saveAs(`${out}/sets.csv`);
   ok("CSV export has header + rows", fs.readFileSync(`${out}/sets.csv`, "utf8").split("\n").length > 50);
+  ok("Backup clears the More dot", !(await page.$(".tabbar .badge-dot")));
+  // theme follows the system (context is dark)
+  await page.click('[data-a="theme"][data-v="system"]');
+  ok("Theme: System follows the phone (dark)", (await page.getAttribute("html", "data-theme")) === "dark");
   // Italian
   await page.click('[data-a="lang"][data-v="it"]'); await page.click('[data-a="tab"][data-v="today"]');
   ok("Italian UI", (await page.textContent(".tabbar")).includes("Oggi"));
@@ -146,10 +178,42 @@ try {
   await page.waitForTimeout(500); await ctx.setOffline(true); await page.reload(); await page.waitForSelector("h1");
   ok("Loads offline from service worker", (await page.textContent("h1")) === "Pull");
   await ctx.setOffline(false);
+  // ---- import: pasted plan
+  await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="lang"][data-v="en"]'); await page.click('[data-a="openImport"]');
+  await page.fill('[data-in="impText"]', "LUNEDÌ (PUSH A)\nPetto Panca piana bilanciere 3 7, 8-10 (Piramidale) 120\"\nSpalle Alzate laterali ai cavi 4 12-15 60\"\nGIOVEDÌ (GAMBE & CORE)\nGambe Leg press 4 8-10 120\"\nDorso Row presa singola 3 10 90\"\nCore Plank 3 1 min 60\"");
+  await page.click('[data-a="impReadText"]'); await page.waitForSelector(".improw");
+  const imp = await page.textContent(".scroll");
+  ok("Paste import preview: 2 days, matches + 1 new", (await page.$$(".dayinp")).length === 2 && imp.includes("Bench Press") && imp.includes("Cable Lateral Raise") && imp.includes("New: Row presa singola") && imp.includes("3 × 1 min"));
+  await shot("15-import-preview");
+  await page.click('[data-a="impEdit"][data-v="1"][data-i="0"]'); await page.fill("#sheetText", "4 x 6-8 150s"); await page.click('[data-a="textOk"]'); await page.waitForTimeout(150);
+  ok("Edit sets in preview", (await page.textContent('[data-a="impEdit"][data-v="1"][data-i="0"]')).includes("4 × 6–8 · 150"));
+  await page.fill('[data-in="impName"]', "Scheda novembre"); await page.click('[data-a="impCreate"]'); await page.waitForTimeout(300);
+  ok("Program created from import and active", (await page.inputValue("#pname")) === "Scheda novembre" && (await page.textContent(".toast")).includes("1 new"));
+  await page.click('[data-a="tab"][data-v="today"]');
+  ok("Today now shows the imported plan's first day", (await page.textContent("h1")).includes("Lunedì"));
+  // ---- import: Excel file
+  if (fs.existsSync(XLSX)) {
+    await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="openImport"]');
+    await page.setInputFiles('[data-in="impFile"]', XLSX); await page.waitForSelector(".improw");
+    ok("Excel import preview has day rows", (await page.inputValue(".dayinp")) === "Lunedì (Push A)");
+    await page.click('[data-a="impReset"]');
+  }
+  // ---- import: image without internet → clear message (OCR engine can't download here)
+  if (fs.existsSync(IMG)) {
+    await page.setInputFiles('[data-in="impFile"]', IMG); await page.waitForSelector(".errline", { timeout: 20000 });
+    ok("Image import offline → explains internet is needed once", (await page.textContent(".errline")).includes("internet"));
+    // the app's own image clean-up (JS), checked with the same OCR engine (Tesseract CLI)
+    const b64 = fs.readFileSync(IMG).toString("base64");
+    const png = await page.evaluate(async (b) => { const img = new Image(); img.src = "data:image/jpeg;base64," + b; await img.decode(); return window.__logbook.preprocess(img).toDataURL("image/png"); }, b64);
+    fs.writeFileSync(`${out}/prep-js.png`, Buffer.from(png.split(",")[1], "base64"));
+    const txt = execSync(`tesseract ${out}/prep-js.png - -l ita+eng --psm 6 2>/dev/null`).toString();
+    ok("JS image clean-up: OCR finds all 5 day headers", ["LUNED", "MARTED", "GIOVED", "VENERD", "SABATO"].every(d => txt.toUpperCase().includes(d)));
+  }
   // light theme screenshot of workout
   await page.click('[data-a="tab"][data-v="more"]'); await page.click('[data-a="theme"][data-v="light"]'); await page.click('[data-a="tab"][data-v="today"]');
   await page.click('[data-a="start"]'); await page.waitForSelector(".ex-name"); await shot("14-workout-light-it");
 } catch (e) { results.push(["FAIL", "exception: " + e.message.split("\n")[0]]); await shot("zz-error"); }
-ok("No page errors", errors.length === 0); if (errors.length) console.log(errors);
+const real = errors.filter(e => !/ERR_TUNNEL_CONNECTION_FAILED|ERR_INTERNET_DISCONNECTED|Error: offline/.test(e));
+ok("No page errors (besides the expected offline OCR download)", real.length === 0); if (real.length) console.log(real);
 for (const r of results) console.log(r.join("  "));
 await browser.close(); srv.kill();

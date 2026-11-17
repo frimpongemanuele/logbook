@@ -184,3 +184,29 @@ html[data-theme="light"] .toast button{color:#ffb27a}
 .nextbtn .ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .card.row{display:flex}
 .toast{bottom:auto;top:calc(var(--sat) + 64px)}
+/* v0.5: cardio rows, rest controls, charts, import */
+.set .span3,.sets-head .span3,.hset .span3{grid-column:3 / span 3}
+.tpl .span2,.tpl-head .span2{grid-column:span 2}
+.tpl .span4,.tpl-head .span4{grid-column:span 4}
+.unit{font-size:13px;font-weight:600;color:var(--muted);margin-left:4px}
+.pillbtn{border:0;cursor:pointer;min-height:30px}
+.rest .t{background:none;border:0;padding:0 4px;border-radius:8px;text-align:left;color:inherit;font-variant-numeric:tabular-nums}
+.rest .t:active{background:var(--surface2)}
+.rest .btn.small{padding:0 11px}
+.tabbar button{position:relative}
+.badge-dot{position:absolute;top:9px;left:calc(50% + 8px);width:9px;height:9px;border-radius:99px;background:var(--warn);border:2px solid var(--surface)}
+.duecard{outline:1.5px solid var(--warn)}
+.delta{font-size:15px;margin:2px 0 6px}
+.delta.up b{color:var(--done)} .delta.down b{color:var(--danger)}
+.delta span{color:var(--muted);font-size:13px}
+.chart .grid{stroke:var(--line);stroke-width:1;stroke-dasharray:3 4}
+.pbar{height:8px;border-radius:99px;background:var(--surface2);overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--accent);transition:width .2s}
+.improw{display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid var(--line)}
+.improw:last-child{border-bottom:0}
+.improw > button.flex1{min-height:44px}
+.impsets{flex:none;max-width:42%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 10px}
+.dayinp{font-weight:700;min-height:44px}
+.errline{color:var(--danger);font-weight:600}
+.mb8{margin-bottom:8px}
+.impsets{white-space:normal;height:auto;min-height:40px;line-height:1.25;padding:6px 10px;max-width:46%;text-align:center}

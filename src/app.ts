@@ -4,14 +4,15 @@ import { t, setLang, getLang, Lang } from "./i18n.js";
 import { seedExercises, MUSCLES } from "./seed.js";
 import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2 } from "./domain.js";
 import { setsCsv, mergeImport } from "./data.js";
+import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine, readDelimited } from "./importer.js";
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 const DAY = 86_400_000;
 
 type Any = any;
 const A: Any = {
   lib: new Map<string, Any>(), programs: [] as Any[], sessions: [] as Any[],
-  settings: { lang: "en", theme: "dark", lastBackupAt: null as number | null },
+  settings: { lang: "en", theme: "system", lastBackupAt: null as number | null } as Any,
   nav: [{ v: "today", p: {} }] as { v: string; p: Any }[],
   sheet: null as Any, toast: null as Any, cal: null as Any, q: "", qm: "", persisted: null as boolean | null,
 };
@@ -35,6 +36,14 @@ const dstr = (ms: number, o: Intl.DateTimeFormatOptions = { weekday: "short", da
 const tstr = (ms: number) => new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
 const sessionDate = (s: Any) => (s.dateUnknown ? t("imported") : dstr(s.startedAt, { weekday: "short", day: "numeric", month: "short", year: "numeric" }));
 const loadTxt = (ex: Any, load: number) => (ex && (ex.loadType === "bodyweight" || ex.loadType === "bw_plus") ? (load ? "+" + fmt(load) : t("bw")) : fmt(load));
+const trackOf = (exId: string) => exById(exId)?.track || "wr";
+/** One set as text, by the exercise's tracking type: 80×8@2 · ×100 · 12 min */
+function setTxt(ex: Any, x: Any, withRir = false) {
+  const tr = ex?.track || "wr";
+  if (tr === "time") return `${fmt(x.mins)} min`;
+  if (tr === "reps") return `×${x.reps}`;
+  return `${loadTxt(ex, x.load)}×${x.reps}${withRir && x.rir != null ? "@" + x.rir : ""}`;
+}
 const elapsed = (s: Any) => (s.pausedAt || s.endedAt || now()) - s.startedAt - (s.pausedMs || 0);
 
 function go(v: string, p: Any = {}) { A.nav.push({ v, p }); A.sheet = null; render(); scrollTop(); }
@@ -69,6 +78,27 @@ async function boot() {
       await db.putMany("exercises", ex);
       exs = ex;
     }
+    // library updates for existing installs: new seed exercises, new aliases, tracking type
+    const have = new Map(exs.map((e: Any) => [e.id, e])); const upd: Any[] = [];
+    for (const sd of seedExercises(now())) {
+      const cur: Any = have.get(sd.id);
+      if (!cur) { upd.push(sd); exs.push(sd); continue; }
+      let ch = false;
+      const al = Array.from(new Set([...(cur.aliases || []), ...sd.aliases]));
+      if (al.length !== (cur.aliases || []).length) { cur.aliases = al; ch = true; }
+      if (!cur.track) { cur.track = sd.track; ch = true; }
+      if (ch) upd.push(cur);
+    }
+    // your own exercises named like a built-in cardio / timed one (e.g. "Rope jumping") take its tracking
+    const key = (x: string) => (x || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+    const seedByName = new Map<string, Any>();
+    for (const sd of seedExercises(0)) if (sd.track !== "wr") for (const n of [sd.name.en, sd.name.it, ...sd.aliases]) seedByName.set(key(n), sd);
+    for (const e of exs) if (e.custom && !e.track) {
+      const sd = seedByName.get(key(e.name.en)) || seedByName.get(key(e.name.it));
+      if (sd) { e.track = sd.track; e.loadType = "bodyweight"; e.inc = 0; if (sd.mechanic === "cardio") { e.mechanic = "cardio"; e.pattern = "cardio"; if (!e.muscles.length) e.muscles = [{ m: "cardio", role: "primary" }]; } upd.push(e); }
+    }
+    for (const e of exs) if (!e.track) { e.track = "wr"; upd.push(e); }
+    if (upd.length) await db.putMany("exercises", upd);
     exs.forEach((e: Any) => A.lib.set(e.id, e));
     A.programs = await db.all("programs");
     A.sessions = await db.all("sessions");
@@ -107,10 +137,12 @@ function buildSets(tpls: Any[], exId: string) {
     const prev = lp ? (warm ? lp.warm[wi++] : lp.work[ki++]) : null;
     const load = tp.load ?? prev?.load ?? 0;
     const reps = prev && prev.load === load ? Math.max(prev.reps, tp.repsMin) : tp.repsMin;
+    const tr = trackOf(exId);
+    const mins = tr === "time" ? (tp.mins ?? prev?.mins ?? 10) : null;
     return {
-      id: uid(), type: tp.type, load, reps, rir: warm ? null : tp.rir, rpe: null, done: false, doneAt: null, edited: {},
-      last: prev ? { load: prev.load, reps: prev.reps, rir: prev.rir } : null,
-      t: { repsMin: tp.repsMin, repsMax: tp.repsMax, rir: tp.rir, load: tp.load },
+      id: uid(), type: tp.type, load: tr === "wr" ? load : 0, reps: tr === "time" ? 0 : reps, mins, rir: warm || tr !== "wr" ? null : tp.rir, rpe: null, done: false, doneAt: null, edited: {},
+      last: prev ? { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null } : null,
+      t: { repsMin: tp.repsMin, repsMax: tp.repsMax, rir: tr === "wr" ? tp.rir : null, load: tp.load, mins: tp.mins ?? null },
     };
   });
 }
@@ -123,7 +155,8 @@ function sessionExercise(pe: Any) {
   };
 }
 
-const defaultTemplates = () => [0, 1, 2].map(() => ({ id: uid(), type: "working", load: null, repsMin: 8, repsMax: 12, rir: 2 }));
+const defaultTemplates = (track = "wr") => [0, 1, 2].map(() => track === "time" ? { id: uid(), type: "working", load: null, repsMin: 0, repsMax: 0, rir: null, mins: 10 }
+  : track === "reps" ? { id: uid(), type: "working", load: null, repsMin: 10, repsMax: 15, rir: null } : { id: uid(), type: "working", load: null, repsMin: 8, repsMax: 12, rir: 2 });
 
 async function startWorkout(program: Any | null, dayIdx: number | null) {
   if (activeSession()) { go("workout"); return; }
@@ -169,9 +202,23 @@ const I: Record<string, string> = {
 const header = (title: string, right = "") =>
   `<header class="hdr"><button class="iconbtn" data-a="back" aria-label="${t("back")}">${I.back}</button><div class="hdr-t">${esc(title)}</div><div class="hdr-r">${right}</div></header>`;
 
+/* ---------------- theme ---------------- */
+const darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+function applyTheme() {
+  const pref = A.settings.theme || "system";
+  const resolved = pref === "system" ? (darkMq && darkMq.matches ? "dark" : "light") : pref;
+  document.documentElement.dataset.theme = resolved;
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute("content", resolved === "dark" ? "#0f1012" : "#f4f4f2");
+}
+if (darkMq) { const onChange = () => { if ((A.settings.theme || "system") === "system") render(); }; darkMq.addEventListener ? darkMq.addEventListener("change", onChange) : (darkMq as Any).addListener(onChange); }
+const backupDue = () => {
+  const lb = A.settings.lastBackupAt; const real = completed().filter((x: Any) => !x.imported);
+  return real.length > 0 && (!lb || (now() - lb > 7 * DAY && real.some((x: Any) => (x.endedAt || 0) > lb)));
+};
+
 /* ---------------- render ---------------- */
 function render() {
-  document.documentElement.dataset.theme = A.settings.theme;
+  applyTheme();
   document.documentElement.lang = L();
   const r = route();
   let h = "";
@@ -180,13 +227,14 @@ function render() {
   else {
     const views: Record<string, (p: Any) => string> = {
       today: vToday, history: vHistory, session: vSession, summary: vSummary, programs: vPrograms, program: vProgram, day: vDay, pe: vPe,
-      library: vLibrary, exercise: vExercise, exform: vExForm, pick: vPick, more: vMore,
+      library: vLibrary, exercise: vExercise, exform: vExForm, pick: vPick, more: vMore, import: vImport,
     };
     const fn = views[r.v] || vToday;
     const top = ["today", "history", "programs", "library", "more"];
     const tabV = top.includes(A.nav[0].v) ? A.nav[0].v : "today";
     const mini = s ? `<button class="minibar num" data-a="openWorkout"><span>${esc(nm(s.dayName))} · <span data-clock>${clock(elapsed(s))}</span></span><span data-rest>${s.rest ? t("rest") + " " + restLeft(s) : "›"}</span></button>` : "";
-    const tabs = top.map(k => `<button data-a="tab" data-v="${k}" ${k === tabV ? 'aria-current="page"' : ""}>${I[k]}<span>${t(k)}</span></button>`).join("");
+    const due = backupDue();
+    const tabs = top.map(k => `<button data-a="tab" data-v="${k}" ${k === tabV ? 'aria-current="page"' : ""}>${I[k]}<span>${t(k)}</span>${k === "more" && due ? `<i class="badge-dot" aria-label="${t("backupShort")}"></i>` : ""}</button>`).join("");
     h = `<div class="view">${fn(r.p)}</div>${mini}<nav class="tabbar">${tabs}</nav>`;
   }
   if (A.sheet) h += vSheet();
@@ -208,20 +256,13 @@ function vToday() {
     h += `<div class="bar-card hot"><div class="flex1"><b>${t("inProgress")}</b><span class="sub small block">${esc(nm(s.dayName))} · ${t("startedAt", { t: tstr(s.startedAt) })} · <span data-clock>${clock(elapsed(s))}</span></span></div>
       <button class="btn primary small" data-a="openWorkout">${t("resume")}</button><button class="iconbtn" data-a="resumeMenu" aria-label="${t("more")}">${I.dots}</button></div>`;
   }
-  const real = completed().filter((x: Any) => !x.imported);
-  const lb = A.settings.lastBackupAt;
-  if (real.length && (!lb || (now() - lb > 7 * DAY && real.some((x: Any) => (x.endedAt || 0) > lb)))) {
-    const open = !!A.settings.backupOpen;
-    h += `<div class="bar-card"><button class="flex1 row tl g8" data-a="toggleBackup" aria-expanded="${open}"><span class="dot" aria-hidden="true"></span><span class="flex1"><b class="small">${t("backupShort")}</b><span class="sub small block">${t("lastBackup", { d: lb ? dstr(lb) : t("never") })}</span></span><span class="faint">${open ? I.up : I.down}</span></button>
-      <button class="btn ghost small" data-a="exportJson">${t("backupNow")}</button></div>${open ? `<p class="sub small expl">${t("backupBody", { d: lb ? dstr(lb) : t("never") })}</p>` : ""}`;
-  }
   const pend = completed().slice(0, 3).find((x: Any) => (x.suggestions || []).some((g: Any) => g.status === "pending"));
   if (pend) {
     const n = pend.suggestions.filter((g: Any) => g.status === "pending").length;
     h += `<button class="card rowbtn" data-a="openSummary" data-id="${pend.id}"><span>${t("suggWaiting", { n })}</span><span class="accent">${t("review")} ${I.chev}</span></button>`;
   }
   if (!p) return h + `<h1>${t("welcome")}</h1><p class="sub">${t("welcomeBody")}</p>
-    <label class="btn primary block mt16 filebtn">${t("importJson")}<input type="file" accept="application/json,.json" data-in="importFile" hidden></label>
+    <label class="btn primary block mt16 filebtn">${t("importJson")}<input type="file" accept=".json,.csv,.tsv,.txt,.md,.xlsx,image/*,text/*,application/json" data-in="impFile" hidden></label>
     <button class="btn ghost block mt8" data-a="newProgram">+ ${t("newProgram")}</button>
     <button class="btn ghost block mt8" data-a="startEmpty">${t("emptyWorkout")}</button>
     <p class="sub mt16">${t("installHint")}</p></div>`;
@@ -235,7 +276,7 @@ function vToday() {
     <div class="row mt8"><button class="btn ghost flex1" data-a="changeDay">${t("changeDay")}</button><button class="btn ghost flex1" data-a="startEmpty">${t("emptyWorkout")}</button></div>`;
   h += `<h2>${t("lastTime")}</h2><div class="card">` + day.exercises.map((pe: Any) => {
     const lp = lastPerf(pe.exId); const ex = exById(pe.exId);
-    const txt = lp ? lp.work.map((y: Any) => `${loadTxt(ex, y.load)}×${y.reps}`).join(" · ") : "—";
+    const txt = lp ? lp.work.map((y: Any) => setTxt(ex, y)).join(" · ") : "—";
     return `<div class="li"><span>${esc(exName(pe.exId))}${pe.optional ? ` <span class="faint">(${t("optional")})</span>` : ""}${pe.group ? ` <span class="pill">${esc(pe.group)}</span>` : ""}</span><span class="muted num small r">${txt}</span></div>`;
   }).join("") + `</div></div>`;
   return h;
@@ -257,7 +298,8 @@ function nextUp(s: Any): string | null {
     const i = e.sets.findIndex((x: Any) => !x.done); if (i < 0) continue;
     const x = e.sets[i], ex = exById(e.exId);
     const no = x.type === "warmup" ? "W" : e.sets.slice(0, i + 1).filter(isWork).length;
-    return `${k === s.idx ? "" : esc(nm(e.name)) + " · "}${t("set")} ${no} · ${loadTxt(ex, x.load)} kg × ${x.reps}`;
+    const what = (ex?.track || "wr") === "wr" ? `${loadTxt(ex, x.load)} kg × ${x.reps}` : setTxt(ex, x);
+    return `${k === s.idx ? "" : esc(nm(e.name)) + " · "}${t("set")} ${no} · ${what}`;
   }
   return null;
 }
@@ -279,33 +321,41 @@ function vWorkout(s: Any) {
   const rest = e.rest ?? ex?.rest ?? 120;
   const sets = e.sets.map((x: Any, i: number) => {
     const g = (f: string) => (!x.done && !x.edited?.[f] ? "ghost" : "");
-    const last = x.last ? `<b>${loadTxt(ex, x.last.load)}×${x.last.reps}</b>${x.last.rir != null ? " @" + x.last.rir : ""}` : "—";
+    const tr = ex?.track || "wr";
+    const last = x.last ? (tr === "wr" ? `<b>${loadTxt(ex, x.last.load)}×${x.last.reps}</b>${x.last.rir != null ? " @" + x.last.rir : ""}` : `<b>${setTxt(ex, x.last)}</b>`) : "—";
+    const cells = tr === "time"
+      ? `<button class="cell num span3 ${g("mins")}" data-a="wNum" data-f="mins" data-v="${i}" aria-label="${t("minutes")}">${fmt(x.mins)} <span class="unit">min</span></button>`
+      : tr === "reps"
+      ? `<button class="cell num span3 ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps} <span class="unit">${t("reps").toLowerCase()}</span></button>`
+      : `<button class="cell num ${g("load")}" data-a="wNum" data-f="load" data-v="${i}" aria-label="${t("weight")}">${loadTxt(ex, x.load)}</button>
+      <button class="cell num ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps}</button>
+      <button class="cell num ${g("rir")}" data-a="wRir" data-v="${i}" aria-label="RIR">${x.rir == null ? "–" : x.rir}</button>`;
+    const tgt = !isWork(x) || !x.t ? "" : tr === "time" ? (x.t.mins != null ? `${fmt(x.t.mins)} min` : "")
+      : `${x.t.repsMin}${x.t.repsMax !== x.t.repsMin ? "–" + x.t.repsMax : ""}${tr === "wr" && x.t.rir != null ? " @ RIR " + x.t.rir : ""}`;
     return `<div class="set ${x.done ? "done" : ""}">
       <button data-a="setMenu" data-v="${i}" aria-label="${t("set")} ${i + 1}">${badge(e, i)}</button>
       <div class="last num">${last}</div>
-      <button class="cell num ${g("load")}" data-a="wNum" data-f="load" data-v="${i}" aria-label="${t("weight")}">${loadTxt(ex, x.load)}</button>
-      <button class="cell num ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps}</button>
-      <button class="cell num ${g("rir")}" data-a="wRir" data-v="${i}" aria-label="RIR">${x.rir == null ? "–" : x.rir}</button>
+      ${cells}
       <button class="check" data-a="check" data-v="${i}" aria-label="${t("done")}" aria-pressed="${!!x.done}">${I.check}</button>
-      ${isWork(x) && x.t ? `<div class="target num">${t("target")}: ${x.t.repsMin}${x.t.repsMax !== x.t.repsMin ? "–" + x.t.repsMax : ""}${x.t.rir != null ? " @ RIR " + x.t.rir : ""}</div>` : ""}
+      ${tgt ? `<div class="target num">${t("target")}: ${tgt}</div>` : ""}
     </div>`;
   }).join("");
   const partner = e.group ? s.exercises.filter((x: Any) => x.group === e.group && x !== e).map((x: Any) => esc(nm(x.name))).join(", ") : "";
   const body = `<div class="wk-body scroll" id="wkbody">
     <div class="row spread top"><h2 class="ex-name">${esc(nm(e.name))}</h2><button class="iconbtn" data-a="exMenu" aria-label="${t("edit")}">${I.dots}</button></div>
-    <div class="ex-meta"><span class="pill">${t("eq_" + (ex?.equipment || "other"))}</span><span class="pill num">${t("restOn")} ${rest}${t("sec")}</span><span class="pill num">+${fmt(ex?.inc)} kg</span>
+    <div class="ex-meta"><span class="pill">${t("eq_" + (ex?.equipment || "other"))}</span><button class="pill num pillbtn" data-a="restEdit">${t("restOn")} ${rest}${t("sec")} ✎</button>${(ex?.track || "wr") === "wr" ? `<span class="pill num">+${fmt(ex?.inc)} kg</span>` : ""}
       ${e.optional ? `<span class="pill">${t("optional")}</span>` : ""}${e.skipped ? `<span class="pill warn">${t("skip")}</span>` : ""}${partner ? `<span class="pill accent">${t("superset")} ${esc(e.group)}: ${partner}</span>` : ""}</div>
     ${e.exId !== e.plannedExId ? `<div class="note">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
     ${e.notes ? `<div class="note">${esc(e.notes)}</div>` : ""}
-    <div class="sets-head"><span>${t("set")}</span><span>${t("last")}</span><span class="c">${t("kg")}</span><span class="c">${t("reps")}</span><span class="c">${t("rir")}</span><span></span></div>
+    <div class="sets-head"><span>${t("set")}</span><span>${t("last")}</span>${(ex?.track || "wr") === "wr" ? `<span class="c">${t("kg")}</span><span class="c">${t("reps")}</span><span class="c">${t("rir")}</span>` : `<span class="c span3">${(ex?.track) === "time" ? t("minutes") : t("reps")}</span>`}<span></span></div>
     ${sets}
     <div class="row mt4"><button class="addset flex1" data-a="wAddSet">+ ${t("addSet")}</button><button class="addset" style="flex:0 0 auto;padding:0 14px" data-a="wAddWarm">+ W</button></div>
   </div>`;
   let restH = "";
   if (s.rest) {
     const l = s.rest.endsAt - now(), p = Math.max(0, Math.min(1, l / (s.rest.total * 1000)));
-    restH = `<div class="rest ${l <= 0 ? "over" : ""}" data-restbar><span class="t num" aria-live="polite">${l > 0 ? clock(l) : t("restDone")}</span><span class="bar"><i style="width:${p * 100}%"></i></span>
-      <button class="btn ghost small num" data-a="rest30">+30${t("sec")}</button><button class="btn ghost small" data-a="restSkip">${t("skip")}</button></div>`;
+    restH = `<div class="rest ${l <= 0 ? "over" : ""}" data-restbar><button class="t num" data-a="restEdit" aria-live="polite" aria-label="${t("editRest")}">${l > 0 ? clock(l) : t("restDone")}</button><span class="bar"><i style="width:${p * 100}%"></i></span>
+      <button class="btn ghost small num" data-a="restMinus">−30</button><button class="btn ghost small num" data-a="rest30">+30</button><button class="btn ghost small" data-a="restSkip">${t("skip")}</button></div>`;
     const nu = nextUp(s);
     if (nu) restH += `<div class="next-up small num">${t("nextUp")}: ${nu}</div>`;
   }
@@ -331,8 +381,8 @@ async function toggleSet(s: Any, i: number) {
       const pos = grp.findIndex((o: Any) => o.j === s.idx);
       const nxt = grp[pos + 1];
       if (nxt && nxt.y.sets.some((z: Any) => !z.done)) { s.idx = nxt.j; s.rest = null; }
-      else { s.rest = { endsAt: now() + restSec * 1000, total: restSec, buzzed: false }; const first = grp.find((o: Any) => o.y.sets.some((z: Any) => !z.done)); if (first) s.idx = first.j; }
-    } else s.rest = { endsAt: now() + restSec * 1000, total: restSec, buzzed: false };
+      else { s.rest = { startAt: now(), endsAt: now() + restSec * 1000, total: restSec, buzzed: false }; const first = grp.find((o: Any) => o.y.sets.some((z: Any) => !z.done)); if (first) s.idx = first.j; }
+    } else s.rest = { startAt: now(), endsAt: now() + restSec * 1000, total: restSec, buzzed: false };
   }
   await saveSession(s);
 }
@@ -340,7 +390,7 @@ async function toggleSet(s: Any, i: number) {
 async function finishSession(s: Any) {
   if (s.pausedAt) { s.pausedMs += now() - s.pausedAt; s.pausedAt = null; }
   s.status = "completed"; s.endedAt = now(); s.rest = null;
-  s.suggestions = s.exercises.filter((e: Any) => !e.skipped && e.peId).map((e: Any) => {
+  s.suggestions = s.exercises.filter((e: Any) => !e.skipped && e.peId && trackOf(e.exId) === "wr").map((e: Any) => {
     const ex = exById(e.exId);
     const g = suggest(e.sets, ex?.inc ?? 2.5);
     return g ? { peId: e.peId, exId: e.exId, substituted: e.exId !== e.plannedExId, ...g, status: "pending" } : null;
@@ -360,6 +410,7 @@ function why(g: Any) {
     if (g.unknownEffort) w += t("whyUnknown");
     return w;
   }
+  if (g.kind === "reps" && g.topNoLoad) return t("whyTopNoLoad");
   if (g.kind === "reps") return t("whyReps", { n: g.setNo, a: fmt(g.limitAdj), t: g.limitTarget }) + (g.unknownEffort ? t("whyUnknown") : "");
   return t("whyHold", { n: g.setNo, a: fmt(g.limitAdj), t: g.limitTarget, h: g.harder ? t("whyHarder") : "" }) + (g.unknownEffort ? t("whyUnknown") : "");
 }
@@ -379,15 +430,23 @@ function suggCards(s: Any) {
   }).join("");
 }
 function sessionStats(s: Any) {
-  let sets = 0, vol = 0;
-  s.exercises.forEach((e: Any) => { if (e.skipped) return; sets += e.sets.filter((x: Any) => x.done && isWork(x)).length; vol += volumeLoad(e.sets); });
-  return { sets, vol };
+  let sets = 0, vol = 0, mins = 0, cReps = 0;
+  s.exercises.forEach((e: Any) => {
+    if (e.skipped) return;
+    const tr = trackOf(e.exId), done = e.sets.filter((x: Any) => x.done && isWork(x));
+    sets += done.length;
+    if (tr === "wr") vol += volumeLoad(e.sets);
+    else if (tr === "time") mins += done.reduce((a: number, x: Any) => a + (x.mins || 0), 0);
+    else if (exById(e.exId)?.mechanic === "cardio") cReps += done.reduce((a: number, x: Any) => a + (x.reps || 0), 0);
+  });
+  return { sets, vol, mins, cReps };
 }
+const cardioLine = (st: Any) => st.mins || st.cReps ? `<p class="sub small">${t("cardio")}: ${[st.mins ? fmt(st.mins) + " min" : "", st.cReps ? st.cReps + " " + t("reps").toLowerCase() : ""].filter(Boolean).join(" · ")}</p>` : "";
 function vSummary(p: Any) {
   const s = A.sessions.find((x: Any) => x.id === p.id); if (!s) return "";
   const st = sessionStats(s);
   return `<div class="scroll"><h1>${t("summary")}</h1><div class="sub">${esc(nm(s.dayName))} · ${sessionDate(s)}</div>
-    <div class="stats"><div class="stat"><b class="num">${clock(elapsed(s))}</b><span>${t("duration")}</span></div><div class="stat"><b class="num">${st.sets}</b><span>${t("workSets")}</span></div><div class="stat"><b class="num">${Math.round(st.vol).toLocaleString(locale())}</b><span>${t("volume")}</span></div></div>
+    <div class="stats"><div class="stat"><b class="num">${clock(elapsed(s))}</b><span>${t("duration")}</span></div><div class="stat"><b class="num">${st.sets}</b><span>${t("workSets")}</span></div><div class="stat"><b class="num">${Math.round(st.vol).toLocaleString(locale())}</b><span>${t("volume")}</span></div></div>${cardioLine(st)}
     ${(s.suggestions || []).length ? `<h2>${t("forNext")}</h2>${suggCards(s)}` : ""}
     <button class="btn ghost block mt16" data-a="tab" data-v="today">${t("close")}</button></div>`;
 }
@@ -419,7 +478,21 @@ function vHistory() {
   for (let i = 0; i < startDow; i++) cells += `<span></span>`;
   for (let d = 1; d <= nDays; d++) { const ds = new Date(c.y, c.m, d).toDateString(); cells += `<span class="dd ${trained.has(ds) ? "on" : ""} ${ds === today ? "now" : ""}">${d}</span>`; }
   const monthName = first.toLocaleDateString(locale(), { month: "long", year: "numeric" });
-  let h = `<div class="scroll"><h1>${t("history")}</h1>
+  // progress chart: exercises with history, most logged first
+  const counts = new Map<string, number>();
+  for (const s of list) for (const e of s.exercises) if (!e.skipped && e.sets.some((x: Any) => x.done && isWork(x))) counts.set(e.exId, (counts.get(e.exId) || 0) + 1);
+  const exs = [...counts.entries()].sort((a, b) => b[1] - a[1] || exName(a[0]).localeCompare(exName(b[0]))).map(x => x[0]);
+  let prog = "";
+  if (exs.length) {
+    const pe = A.histEx && counts.has(A.histEx) ? A.histEx : exs[0];
+    const tr = trackOf(pe), ms = metricsFor(tr), m = A.histM && ms.includes(A.histM) ? A.histM : ms[0];
+    const sp = seriesFor(pe, m);
+    prog = `<div class="card"><div class="row spread"><b>${t("progressT")}</b></div>
+      <select class="inp mt8" data-in="histEx" aria-label="${t("exercises")}">${exs.map(id => `<option value="${id}" ${id === pe ? "selected" : ""}>${esc(exName(id))} (${counts.get(id)})</option>`).join("")}</select>
+      ${ms.length > 1 ? `<div class="seg mt8">${ms.map(k => `<button class="${k === m ? "on" : ""}" data-a="histM" data-v="${k}">${t("m_" + k)}</button>`).join("")}</div>` : ""}
+      <div class="mt8">${deltaLine(sp, m)}${lineChart(sp, m)}</div></div>`;
+  }
+  let h = `<div class="scroll"><h1>${t("history")}</h1>${prog}
     <div class="card"><div class="row spread"><button class="iconbtn" data-a="calPrev" aria-label="prev">${I.back}</button><b class="cap">${monthName}</b><button class="iconbtn flip" data-a="calNext" aria-label="next">${I.back}</button></div><div class="cal">${cells}</div></div>`;
   if (!list.length) h += `<p class="sub">${t("noSessions")}</p>`;
   h += list.map((s: Any) => {
@@ -434,16 +507,18 @@ function vSession(p: Any) {
   const d = new Date(s.startedAt); const iso = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   let h = header(nm(s.dayName), `<button class="iconbtn" data-a="sessionMenu" data-id="${s.id}" aria-label="${t("edit")}">${I.dots}</button>`) + `<div class="scroll">
     <div class="row spread"><label class="sub" for="sdate">${t("date")}</label><input id="sdate" type="date" class="inp w-auto" value="${s.dateUnknown ? "" : iso}" data-in="sessionDate" data-id="${s.id}"></div>
-    <div class="stats"><div class="stat"><b class="num">${s.dateUnknown ? "–" : clock(elapsed(s))}</b><span>${t("duration")}</span></div><div class="stat"><b class="num">${st.sets}</b><span>${t("workSets")}</span></div><div class="stat"><b class="num">${Math.round(st.vol).toLocaleString(locale())}</b><span>${t("volume")}</span></div></div>`;
+    <div class="stats"><div class="stat"><b class="num">${s.dateUnknown ? "–" : clock(elapsed(s))}</b><span>${t("duration")}</span></div><div class="stat"><b class="num">${st.sets}</b><span>${t("workSets")}</span></div><div class="stat"><b class="num">${Math.round(st.vol).toLocaleString(locale())}</b><span>${t("volume")}</span></div></div>${cardioLine(st)}`;
   h += s.exercises.map((e: Any, ei: number) => {
     const ex = exById(e.exId);
     return `<div class="card"><div class="row spread"><b>${esc(nm(e.name))}</b>${e.skipped ? `<span class="pill warn">${t("skip")}</span>` : ""}</div>
       ${e.exId !== e.plannedExId ? `<div class="faint small">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
       ${e.sets.map((x: Any, si: number) => `<div class="hset ${x.done ? "" : "undone"}">
         <span class="faint num">${x.type === "warmup" ? "W" : e.sets.slice(0, si + 1).filter(isWork).length}</span>
-        <button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="load">${loadTxt(ex, x.load)} kg</button>
+        ${(ex?.track || "wr") === "time" ? `<button class="cell sm num span3" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="mins">${fmt(x.mins)} min</button>`
+          : (ex?.track || "wr") === "reps" ? `<button class="cell sm num span3" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="reps">× ${x.reps}</button>`
+          : `<button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="load">${loadTxt(ex, x.load)} kg</button>
         <button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="reps">× ${x.reps}</button>
-        <button class="cell sm num" data-a="hRir" data-id="${s.id}" data-e="${ei}" data-v="${si}">RIR ${x.rir ?? "–"}</button>
+        <button class="cell sm num" data-a="hRir" data-id="${s.id}" data-e="${ei}" data-v="${si}">RIR ${x.rir ?? "–"}</button>`}
         <button class="iconbtn" data-a="hDel" data-id="${s.id}" data-e="${ei}" data-v="${si}" aria-label="${t("deleteSet")}">${I.x}</button></div>`).join("")}
       </div>`;
   }).join("");
@@ -478,7 +553,9 @@ function vDay(p: Any) {
   return header(nm(d.name), `<button class="iconbtn" data-a="dayMenu" data-id="${pr.id}" data-v="${p.d}" aria-label="${t("edit")}">${I.dots}</button>`) + `<div class="scroll">
     <div class="sortable" data-sort="day" data-id="${pr.id}" data-d="${p.d}">${d.exercises.map((pe: Any, i: number) => {
       const ex = exById(pe.exId);
-      const sum = pe.sets.map((s: Any) => s.type === "warmup" ? `W ${loadTxt(ex, s.load ?? 0)}×${s.repsMin}` : `${s.load != null ? loadTxt(ex, s.load) + "×" : ""}${s.repsMin}${s.repsMax !== s.repsMin ? "–" + s.repsMax : ""}${s.rir != null ? "@" + s.rir : ""}`).join(" · ");
+      const tr = ex?.track || "wr";
+      const sum = pe.sets.map((s: Any) => tr === "time" ? `${fmt(s.mins ?? 0)} min` : tr === "reps" ? `×${s.repsMin}${s.repsMax !== s.repsMin ? "–" + s.repsMax : ""}`
+        : s.type === "warmup" ? `W ${loadTxt(ex, s.load ?? 0)}×${s.repsMin}` : `${s.load != null ? loadTxt(ex, s.load) + "×" : ""}${s.repsMin}${s.repsMax !== s.repsMin ? "–" + s.repsMax : ""}${s.rir != null ? "@" + s.rir : ""}`).join(" · ");
       return `<div class="card row sort-item"><button class="flex1 tl" data-a="openPe" data-id="${pr.id}" data-d="${p.d}" data-v="${i}">
         <b>${esc(exName(pe.exId))}</b>${pe.group ? ` <span class="pill accent">${esc(pe.group)}</span>` : ""}${pe.optional ? ` <span class="pill">${t("optional")}</span>` : ""}
         <span class="sub block num">${sum}</span></button>
@@ -492,13 +569,18 @@ function vPe(p: Any) {
   const groups = ["", "A", "B", "C", "D"];
   return header(exName(pe.exId), `<button class="iconbtn" data-a="peMenu" data-id="${pr.id}" data-d="${p.d}" data-v="${p.e}" aria-label="${t("edit")}">${I.dots}</button>`) + `<div class="scroll">
     <h2>${t("sets")}</h2>
-    <div class="tpl-head"><span></span><span>${t("kg")}</span><span>${t("repsMin")}</span><span>${t("repsMax")}</span><span>RIR</span><span></span></div>
+    ${(ex?.track || "wr") === "wr" ? `<div class="tpl-head"><span></span><span>${t("kg")}</span><span>${t("repsMin")}</span><span>${t("repsMax")}</span><span>RIR</span><span></span></div>`
+      : ex.track === "reps" ? `<div class="tpl-head"><span></span><span class="span2">${t("repsMin")}</span><span class="span2">${t("repsMax")}</span><span></span></div>`
+      : `<div class="tpl-head"><span></span><span class="span4">${t("minutes")}</span><span></span></div>`}
     ${pe.sets.map((s: Any, i: number) => `<div class="tpl">
       <button data-a="tplType" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}" class="badge ${s.type === "warmup" ? "w" : s.type === "top" ? "acc" : ""}">${s.type === "warmup" ? "W" : s.type === "top" ? "T" : s.type === "backoff" ? "B" : s.type === "amrap" ? "A" : s.type === "drop" ? "D" : pe.sets.slice(0, i + 1).filter(isWork).length}</button>
-      <button class="cell sm num" data-a="tplNum" data-f="load" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.load == null ? "–" : loadTxt(ex, s.load)}</button>
+      ${(ex?.track || "wr") === "time" ? `<button class="cell sm num span4" data-a="tplNum" data-f="mins" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${fmt(s.mins ?? 0)} min</button>`
+        : ex.track === "reps" ? `<button class="cell sm num span2" data-a="tplNum" data-f="repsMin" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMin}</button>
+      <button class="cell sm num span2" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax}</button>`
+        : `<button class="cell sm num" data-a="tplNum" data-f="load" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.load == null ? "–" : loadTxt(ex, s.load)}</button>
       <button class="cell sm num" data-a="tplNum" data-f="repsMin" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMin}</button>
       <button class="cell sm num" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax}</button>
-      <button class="cell sm num" data-a="tplRir" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.rir ?? "–"}</button>
+      <button class="cell sm num" data-a="tplRir" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.rir ?? "–"}</button>`}
       <button class="iconbtn" data-a="tplDel" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}" aria-label="${t("deleteSet")}">${I.x}</button></div>`).join("")}
     <div class="row g8 mt4"><button class="addset flex1" data-a="tplAdd" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}">+ ${t("addSet")}</button><button class="addset flex1" data-a="tplAddWarm" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}">+ ${t("addWarmup")}</button></div>
     <h2>${t("restSec")}</h2>
@@ -525,7 +607,53 @@ function libList(mode: string, ctx: Any) {
 function vLibrary() {
   return `<div class="scroll"><div class="row spread"><h1>${t("library")}</h1><button class="btn ghost small" data-a="newExercise">+ ${t("newExercise")}</button></div>${libList("openExercise", null)}</div>`;
 }
-function vPick(p: Any) { return header(p.mode === "substitute" ? t("substitute") : p.mode === "replacePe" ? t("replaceEx") : t("addExercise")) + `<div class="scroll">${libList("picked", p)}</div>`; }
+function vPick(p: Any) {
+  const keep = p.mode === "impItem" ? `<button class="btn ghost block mb8" data-a="impKeepNew" data-ctx='${esc(JSON.stringify(p))}'>${t("keepNew", { x: esc(impTarget(p)?.name || "") })}</button>` : "";
+  return header(p.mode === "substitute" ? t("substitute") : p.mode === "replacePe" ? t("replaceEx") : p.mode === "impItem" ? t("matchEx") : t("addExercise")) + `<div class="scroll">${keep}${libList("picked", p)}</div>`;
+}
+const impTarget = (p: Any) => (A.imp ? (p.kind === "log" ? A.imp.sessions[p.di]?.exercises[p.ii] : A.imp.days[p.di]?.items[p.ii]) : null);
+
+/** Per-session values for an exercise, oldest first. */
+function metricsFor(track: string) { return track === "time" ? ["mins"] : track === "reps" ? ["reps", "bestReps"] : ["e1rm", "top", "vol"]; }
+function seriesFor(exId: string, m: string) {
+  return (exHistory(exId) as Any[]).slice().reverse().map((h: Any) => {
+    const w = h.work; let v: number | null = null;
+    if (m === "e1rm") v = h.best ? h.best.v : null;
+    else if (m === "top") v = Math.max(...w.map((x: Any) => x.load || 0));
+    else if (m === "vol") v = volumeLoad(w);
+    else if (m === "reps") v = w.reduce((a: number, x: Any) => a + (x.reps || 0), 0);
+    else if (m === "bestReps") v = Math.max(...w.map((x: Any) => x.reps || 0));
+    else if (m === "mins") v = w.reduce((a: number, x: Any) => a + (x.mins || 0), 0);
+    return v == null ? null : { v, s: h.s };
+  }).filter(Boolean) as { v: number; s: Any }[];
+}
+const metricUnit = (m: string) => (m === "e1rm" || m === "top" || m === "vol" ? "kg" : m === "mins" ? "min" : t("reps").toLowerCase());
+function lineChart(pts: { v: number; s: Any }[], m: string) {
+  if (pts.length < 2) return `<p class="sub small">${t("needTwo")}</p>`;
+  const W = 340, H = 150, L = 8, R = 46, T = 14, B = 26;
+  const vals = pts.map(p => p.v), mn = Math.min(...vals), mx = Math.max(...vals), pad = (mx - mn) * 0.12 || Math.max(1, mx * 0.05);
+  const lo = mn - pad, hi = mx + pad;
+  const X = (i: number) => L + (i * (W - L - R)) / (pts.length - 1), Y = (v: number) => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const line = pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join(" ");
+  const area = `${X(0).toFixed(1)},${H - B} ${line} ${X(pts.length - 1).toFixed(1)},${H - B}`;
+  const u = metricUnit(m), r = (v: number) => (m === "e1rm" || m === "vol" ? Math.round(v) : fmt(v));
+  const lbl = (p: Any) => (p.s.dateUnknown ? "?" : dstr(p.s.startedAt, { day: "numeric", month: "short" }));
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${pts.map(p => r(p.v)).join(", ")} ${u}">
+    <line x1="${L}" x2="${W - R}" y1="${Y(mx)}" y2="${Y(mx)}" class="grid"/><line x1="${L}" x2="${W - R}" y1="${Y(mn)}" y2="${Y(mn)}" class="grid"/>
+    <polygon points="${area}" fill="var(--accent)" opacity=".12"/>
+    <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="${line}"/>
+    ${pts.map((p, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="${i === pts.length - 1 ? 4.5 : 3}" fill="var(--accent)"/>`).join("")}
+    <text x="${W - R + 6}" y="${Y(mx) + 4}" class="ctext">${r(mx)} ${u}</text><text x="${W - R + 6}" y="${Y(mn) + 4}" class="ctext">${r(mn)} ${u}</text>
+    <text x="${L}" y="${H - 6}" class="ctext">${lbl(pts[0])}</text><text x="${W - R}" y="${H - 6}" text-anchor="end" class="ctext">${lbl(pts[pts.length - 1])}</text></svg>`;
+}
+function deltaLine(pts: { v: number; s: Any }[], m: string) {
+  if (pts.length < 2) return "";
+  const a = pts[0].v, b = pts[pts.length - 1].v, d = b - a, pct = a ? (d / a) * 100 : 0;
+  const u = metricUnit(m), sign = d > 0 ? "+" : d < 0 ? "−" : "±";
+  const cls = d > 0 ? "up" : d < 0 ? "down" : "";
+  const val = m === "e1rm" || m === "vol" ? Math.round(Math.abs(d)) : fmt(Math.abs(d));
+  return `<div class="delta ${cls} num"><b>${sign}${val} ${u}</b> <span>(${sign}${Math.abs(pct).toFixed(1)}%)</span> <span class="faint">${t("sinceFirst", { n: pts.length })}</span></div>`;
+}
 
 function exHistory(exId: string) {
   return completed().map((s: Any) => {
@@ -534,7 +662,7 @@ function exHistory(exId: string) {
     const work = e.sets.filter((x: Any) => x.done && isWork(x));
     if (!work.length) return null;
     let best: Any = null;
-    for (const x of work) { const v = e1rm(x.load, x.reps, x.rir); if (v != null && (!best || v > best.v)) best = { v, x }; }
+    if (trackOf(exId) === "wr") for (const x of work) { const v = e1rm(x.load, x.reps, x.rir); if (v != null && (!best || v > best.v)) best = { v, x }; }
     return { s, work, best };
   }).filter(Boolean);
 }
@@ -547,23 +675,17 @@ function vExercise(p: Any) {
     const v = e1rm(x.load, x.reps, x.rir); if (v != null && (!bestE || v > bestE.v)) bestE = { v, x, s: h.s };
     if (!bestV || x.load * x.reps > bestV.v) bestV = { v: x.load * x.reps, x, s: h.s };
   }));
-  const pts = hist.filter((h: Any) => h.best).slice().reverse().map((h: Any) => h.best.v);
-  let chart = "";
-  if (pts.length >= 2) {
-    const W = 320, H = 110, mn = Math.min(...pts), mx = Math.max(...pts), span = mx - mn || 1;
-    const xy = pts.map((v: number, i: number) => [12 + (i * (W - 24)) / (pts.length - 1), 10 + (H - 20) * (1 - (v - mn) / span)]);
-    chart = `<h2>${t("e1rmChart")}</h2><div class="card"><svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="${t("e1rmChart")}: ${pts.map((v: number) => Math.round(v)).join(", ")} kg">
-      <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" points="${xy.map(a => a.join(",")).join(" ")}"/>
-      ${xy.map(a => `<circle cx="${a[0]}" cy="${a[1]}" r="3.5" fill="var(--accent)"/>`).join("")}
-      <text x="${W - 4}" y="12" text-anchor="end" class="ctext">${Math.round(mx)} kg</text><text x="${W - 4}" y="${H - 2}" text-anchor="end" class="ctext">${Math.round(mn)} kg</text></svg></div>`;
-  }
+  const tr = ex.track || "wr";
+  const em = A.exMetric && metricsFor(tr).includes(A.exMetric) ? A.exMetric : metricsFor(tr)[0];
+  const sp = seriesFor(ex.id, em);
+  const chart = hist.length ? `<h2>${t("progressT")}</h2><div class="card">${metricsFor(tr).length > 1 ? `<div class="seg mb8">${metricsFor(tr).map(k => `<button class="${k === em ? "on" : ""}" data-a="exMetric" data-v="${k}">${t("m_" + k)}</button>`).join("")}</div>` : ""}${deltaLine(sp, em)}${lineChart(sp, em)}</div>` : "";
   const rec = (lbl: string, r: Any, val: string) => `<div class="li"><span>${lbl}</span><span class="r num"><b>${val}</b><span class="sub block small">${r ? `${loadTxt(ex, r.x.load)}×${r.x.reps}${r.x.rir != null ? " @" + r.x.rir : ""} · ${sessionDate(r.s)}` : ""}</span></span></div>`;
   return header(nm(ex.name), `<button class="iconbtn" data-a="exEdit" data-id="${ex.id}" aria-label="${t("edit")}">${I.dots}</button>`) + `<div class="scroll">
     <div class="ex-meta"><span class="pill">${t("eq_" + ex.equipment)}</span>${ex.muscles.map((m: Any) => `<span class="pill ${m.role === "primary" ? "accent" : ""}">${t("m_" + m.m)}${m.role === "secondary" ? " ½" : ""}</span>`).join("")}</div>
-    <div class="row g8"><button class="cell num flex1" data-a="exInc" data-id="${ex.id}">+${fmt(ex.inc)} kg</button><button class="cell num flex1" data-a="exRest" data-id="${ex.id}">${ex.rest} ${t("sec")} ${t("restOn")}</button></div>
-    ${hist.length ? `<h2>${t("records")}</h2><div class="card">${rec(t("heaviest"), heavy, loadTxt(ex, heavy.x.load) + " kg")}${bestE ? rec(t("bestE1rm"), bestE, "~" + Math.round(bestE.v) + " kg") : ""}${rec(t("bestSet"), bestV, Math.round(bestV.v) + " kg")}</div>` : ""}
+    <div class="row g8">${tr === "wr" ? `<button class="cell num flex1" data-a="exInc" data-id="${ex.id}">+${fmt(ex.inc)} kg</button>` : ""}<button class="cell num flex1" data-a="exRest" data-id="${ex.id}">${ex.rest} ${t("sec")} ${t("restOn")}</button></div>
+    ${hist.length && tr === "wr" ? `<h2>${t("records")}</h2><div class="card">${rec(t("heaviest"), heavy, loadTxt(ex, heavy.x.load) + " kg")}${bestE ? rec(t("bestE1rm"), bestE, "~" + Math.round(bestE.v) + " kg") : ""}${rec(t("bestSet"), bestV, Math.round(bestV.v) + " kg")}</div>` : ""}
     ${chart}
-    <h2>${t("history")}</h2>${hist.length ? hist.map((h: Any) => `<button class="card rowbtn" data-a="openSession" data-id="${h.s.id}"><span><b class="small">${sessionDate(h.s)}</b><span class="block num">${h.work.map((x: Any) => `${loadTxt(ex, x.load)}×${x.reps}${x.rir != null ? "@" + x.rir : ""}`).join(" · ")}</span></span>${h.best ? `<span class="faint small num">~${Math.round(h.best.v)}</span>` : ""}</button>`).join("") : `<p class="sub">${t("noHistory")}</p>`}
+    <h2>${t("history")}</h2>${hist.length ? hist.map((h: Any) => `<button class="card rowbtn" data-a="openSession" data-id="${h.s.id}"><span><b class="small">${sessionDate(h.s)}</b><span class="block num">${h.work.map((x: Any) => setTxt(ex, x, true)).join(" · ")}</span></span>${h.best ? `<span class="faint small num">~${Math.round(h.best.v)}</span>` : ""}</button>`).join("") : `<p class="sub">${t("noHistory")}</p>`}
   </div>`;
 }
 function vExForm(p: Any) {
@@ -577,6 +699,7 @@ function vExForm(p: Any) {
     <label class="lbl" for="fen">${t("name")} (English)</label><input id="fen" class="inp" value="${esc(f.name.en)}" data-in="fName" data-v="en">
     <label class="lbl" for="fit">${t("name")} (Italiano)</label><input id="fit" class="inp" value="${esc(f.name.it)}" data-in="fName" data-v="it">
     <label class="lbl" for="feq">${t("equipment")}</label><select id="feq" class="inp" data-in="fEq">${eqs.map(e => `<option value="${e}" ${f.equipment === e ? "selected" : ""}>${t("eq_" + e)}</option>`).join("")}</select>
+    <label class="lbl" for="ftr">${t("tracking")}</label><select id="ftr" class="inp" data-in="fTr">${["wr", "reps", "time"].map(e => `<option value="${e}" ${(f.track || "wr") === e ? "selected" : ""}>${t("tr_" + e)}</option>`).join("")}</select>
     <label class="lbl" for="flt">${t("loadType")}</label><select id="flt" class="inp" data-in="fLt">${lts.map(e => `<option value="${e}" ${f.loadType === e ? "selected" : ""}>${t("lt_" + e)}</option>`).join("")}</select>
     <label class="lbl" for="fpm">${t("primary")}</label><select id="fpm" class="inp" data-in="fPrim">${MUSCLES.map(m => `<option value="${m}" ${prim === m ? "selected" : ""}>${t("m_" + m)}</option>`).join("")}</select>
     <div class="lbl">${t("secondary")}</div><div class="chips-row wrap">${MUSCLES.filter(m => m !== prim).map(m => `<button class="chipf ${sec.has(m) ? "on" : ""}" data-a="fSec" data-v="${m}">${t("m_" + m)}</button>`).join("")}</div>
@@ -586,17 +709,140 @@ function vExForm(p: Any) {
   </div>`;
 }
 
+/* ---------------- Import ---------------- */
+function usedIds() { const u = new Set<string>(); for (const s of A.sessions) for (const e of s.exercises) u.add(e.exId); for (const p of A.programs) for (const d of p.days) for (const e of d.exercises) u.add(e.exId); return u; }
+function setsTxt(it: Any) {
+  const ss = it.sets as Any[]; if (!ss.length) return "";
+  if (ss[0].mins != null) return `${ss.length} × ${fmt(ss[0].mins)} min`;
+  const same = ss.every(x => x.min === ss[0].min && x.max === ss[0].max);
+  const one = (x: Any) => `${x.type === "amrap" ? "max " : ""}${x.min}${x.max !== x.min ? "–" + x.max : ""}`;
+  return same ? `${ss.length} × ${one(ss[0])}` : `${ss.length} × ${ss.map(one).filter((x, i, a) => i === 0 || x !== a[i - 1]).join(", ")}`;
+}
+function vImport() {
+  const im = A.imp;
+  let h = header(t("importT")) + `<div class="scroll">`;
+  if (!im || im.stage === "input") {
+    return h + `<p class="sub">${t("importIntro")}</p>
+      <label class="btn primary block mt12 filebtn">${t("chooseFile")}<input type="file" accept=".json,.csv,.tsv,.txt,.md,.xlsx,image/*,text/*,application/json" data-in="impFile" hidden></label>
+      <p class="faint small mt8">${t("formats")}</p>
+      <h2>${t("orPaste")}</h2><textarea class="inp" rows="8" data-in="impText" placeholder="${esc(t("pasteHint"))}">${esc(A.impText || "")}</textarea>
+      <button class="btn ghost block mt8" data-a="impReadText">${t("readText")}</button>
+      ${im?.error ? `<p class="errline mt12">${esc(im.error)}</p>` : ""}</div>`;
+  }
+  if (im.stage === "busy") return h + `<p class="b mt16">${esc(im.msg)}</p><div class="pbar mt8"><i style="width:${Math.round((im.pct || 0) * 100)}%"></i></div><p class="sub small mt8">${t("ocrNote")}</p></div>`;
+  if (im.kind === "plan") {
+    const nNew = im.days.reduce((a: number, d: Any) => a + d.items.filter((i: Any) => !i.exId).length, 0);
+    h += `<p class="sub">${t("checkPlan", { d: im.days.length, e: im.days.reduce((a: number, d: Any) => a + d.items.length, 0) })}${nNew ? " " + t("newCount", { n: nNew }) : ""}</p>
+      <label class="lbl" for="impn">${t("name")}</label><input id="impn" class="inp" value="${esc(im.name)}" data-in="impName">
+      <label class="toggle"><input type="checkbox" ${im.makeActive ? "checked" : ""} data-in="impActive"> ${t("makeActive")}</label>`;
+    h += im.days.map((d: Any, di: number) => `<div class="card"><div class="row g8"><input class="inp flex1 dayinp" value="${esc(d.name)}" data-in="impDay" data-v="${di}" aria-label="${t("renameDay")}"><button class="iconbtn" data-a="impDelDay" data-v="${di}" aria-label="${t("deleteDay")}">${I.x}</button></div>
+      ${d.items.map((it: Any, ii: number) => `<div class="improw">
+        <button class="flex1 tl" data-a="impPick" data-v="${di}" data-i="${ii}"><b class="${it.exId ? "" : "accent"}">${it.exId ? esc(exName(it.exId)) : t("newEx") + ": " + esc(it.name)}</b>${it.exId && norm2(exName(it.exId)) !== norm2(it.name) ? `<span class="faint small block">“${esc(it.name)}”</span>` : ""}</button>
+        <button class="cell sm num impsets" data-a="impEdit" data-v="${di}" data-i="${ii}">${setsTxt(it)}${it.rest ? ` · ${it.rest}${t("sec")}` : ""}</button>
+        <button class="iconbtn" data-a="impDel" data-v="${di}" data-i="${ii}" aria-label="${t("delete")}">${I.x}</button></div>`).join("")}</div>`).join("");
+    return h + `<button class="btn primary block mt8" data-a="impCreate">${t("createProgram")}</button><button class="btn ghost block mt8" data-a="impReset">${t("startOver")}</button></div>`;
+  }
+  // workout log
+  h += `<p class="sub">${t("checkLog", { n: im.sessions.length })}</p>`;
+  h += im.sessions.map((s: Any, si: number) => `<div class="card"><div class="row spread"><b>${esc(s.name)}</b><input type="date" class="inp w-auto" value="${s.date || ""}" data-in="impDate" data-v="${si}" aria-label="${t("date")}"></div>
+    ${s.exercises.map((e: Any, ei: number) => `<div class="improw"><button class="flex1 tl" data-a="impPick" data-kind="log" data-v="${si}" data-i="${ei}"><b class="${e.exId ? "" : "accent"}">${e.exId ? esc(exName(e.exId)) : t("newEx") + ": " + esc(e.name)}</b>${e.group ? ` <span class="pill">${e.group}</span>` : ""}<span class="faint small block num">${e.sets.map((x: Any) => (x.type === "warmup" ? "W " : "") + (x.mins != null ? fmt(x.mins) + " min" : (x.load ? fmt(x.load) + "×" : "×") + x.reps + (x.rir != null ? "@" + x.rir : ""))).join(" · ")}</span></button></div>`).join("")}</div>`).join("");
+  return h + `<p class="faint small">${t("noDateHint")}</p><button class="btn primary block mt8" data-a="impAddLog">${t("addWorkouts", { n: im.sessions.length })}</button><button class="btn ghost block mt8" data-a="impReset">${t("startOver")}</button></div>`;
+}
+const norm2 = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+function showParsed(r: Any, source: string) {
+  if (r.kind === "none") { A.imp = { stage: "input", error: t("nothingFound") }; render(); return; }
+  matchAll(r.kind === "plan" ? r.days : null, r.kind === "log" ? r.sessions : null, [...A.lib.values()], usedIds());
+  A.imp = { stage: "preview", kind: r.kind, days: r.days || [], sessions: r.sessions || [], name: source || t("importedPlan"), makeActive: true };
+  if (route().v !== "import") go("import", {}); else { render(); scrollTop(); }
+}
+async function handleImportFile(file: File) {
+  const n = (file.name || "").toLowerCase();
+  try {
+    if (n.endsWith(".json") || file.type === "application/json") {
+      const txt = await file.text();
+      try { if (JSON.parse(txt)?.app === "logbook") { await importFile(file); return; } } catch { }
+      showParsed(parseAny(txt), ""); return;
+    }
+    if (route().v !== "import") go("import", {});
+    const base = file.name.replace(/\.[^.]+$/, "");
+    if (file.type.startsWith("image/") || /\.(png|jpe?g|heic|webp|gif)$/.test(n)) {
+      A.imp = { stage: "busy", msg: t("ocrLoading"), pct: 0 }; render();
+      const text = await ocrImage(file, (msg, pct) => { A.imp = { stage: "busy", msg, pct }; render(); });
+      showParsed(parseAny(text), base); return;
+    }
+    if (n.endsWith(".xlsx")) { const rows = await readXlsx(await file.arrayBuffer()); showParsed(parseAny("", rows), base); return; }
+    if (/\.(xls|numbers|ods|docx?|pdf)$/.test(n)) { A.imp = { stage: "input", error: t("unsupported") }; render(); return; }
+    showParsed(parseAny(await file.text()), base);
+  } catch (err: Any) {
+    console.error(err);
+    A.imp = { stage: "input", error: err && err.message === "offline" ? t("ocrOffline") : t("importFailed") + (err && err.message ? " (" + err.message + ")" : "") };
+    render();
+  }
+}
+
+/* ---- image reading: Tesseract (runs on the phone; engine + language data download once) */
+const TESS_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+function loadScript(src: string) {
+  return new Promise<void>((res, rej) => { if ((window as Any).Tesseract) return res(); const sc = document.createElement("script"); sc.src = src; sc.onload = () => res(); sc.onerror = () => rej(new Error("offline")); document.head.appendChild(sc); });
+}
+/** Spreadsheet screenshots: coloured header/day bands carry white text, which OCR misses.
+ *  Per pixel row: if the row is mostly saturated colour, white → black and colour → white; else plain threshold. 2× upscale for small text. */
+export function preprocess(img: CanvasImageSource & { width: number; height: number }): HTMLCanvasElement {
+  const W = img.width, H = img.height;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d", { willReadFrequently: true } as Any) as CanvasRenderingContext2D;
+  ctx.drawImage(img, 0, 0);
+  const id = ctx.getImageData(0, 0, W, H), d = id.data;
+  for (let y = 0; y < H; y++) {
+    let colored = 0;
+    for (let x = 0; x < W; x++) { const i = (y * W + x) * 4, r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mx > 60 && (mx - mn) / mx > 0.25) colored++; }
+    const band = colored > 0.35 * W;
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4, r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      const l = 0.299 * r + 0.587 * g + 0.114 * b, sat = mx ? (mx - mn) / mx : 0;
+      const v = band ? (sat < 0.18 && l > 200 ? 0 : 255) : (l < 150 ? 0 : 255);
+      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  const k = W < 1600 ? 2 : 1;
+  if (k === 1) return c;
+  const o = document.createElement("canvas"); o.width = W * k; o.height = H * k;
+  const octx = o.getContext("2d")!; octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = "high"; octx.drawImage(c, 0, 0, o.width, o.height);
+  return o;
+}
+async function ocrImage(file: File, progress: (msg: string, pct: number) => void): Promise<string> {
+  await loadScript(TESS_URL);
+  const T = (window as Any).Tesseract;
+  const bmp = await createImageBitmap(file);
+  const canvas = preprocess(bmp as Any);
+  let last = 0;
+  const worker = await T.createWorker(["ita", "eng"], 1, { logger: (m: Any) => {
+    const now2 = Date.now(); if (now2 - last < 200 && m.progress < 1) return; last = now2;
+    progress(m.status === "recognizing text" ? t("ocrReading") : t("ocrLoading"), m.status === "recognizing text" ? m.progress : (m.progress || 0) * 0.3);
+  } });
+  try {
+    await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
+    const { data } = await worker.recognize(canvas);
+    return data.text as string;
+  } finally { await worker.terminate(); }
+}
+
 /* ---------------- More ---------------- */
 function vMore() {
   const disc = A.sessions.filter((s: Any) => s.status === "discarded").sort((a: Any, b: Any) => b.startedAt - a.startedAt);
+  const lb = A.settings.lastBackupAt, due = backupDue();
   return `<div class="scroll"><h1>${t("more")}</h1>
+    <div class="card ${due ? "duecard" : ""}"><div class="row g8"><span class="flex1"><b>${t("backupShort")}</b><span class="sub small block">${t("lastBackup", { d: lb ? dstr(lb) : t("never") })}${due ? " · " + t("backupDueShort") : ""}</span></span>
+      <button class="btn ${due ? "primary" : "ghost"} small" data-a="exportJson">${t("backupNow")}</button></div><p class="sub small mt8">${t("backupHelp")}</p></div>
+    <h2>${t("importT")}</h2>
+    <button class="btn primary block" data-a="openImport">${t("importPlan")}</button>
     <h2>${t("language")}</h2><div class="seg"><button class="${L() === "en" ? "on" : ""}" data-a="lang" data-v="en">English</button><button class="${L() === "it" ? "on" : ""}" data-a="lang" data-v="it">Italiano</button></div>
-    <h2>${t("theme")}</h2><div class="seg"><button class="${A.settings.theme === "dark" ? "on" : ""}" data-a="theme" data-v="dark">${t("dark")}</button><button class="${A.settings.theme === "light" ? "on" : ""}" data-a="theme" data-v="light">${t("light")}</button></div>
+    <h2>${t("theme")}</h2><div class="seg">${["system", "light", "dark"].map(k => `<button class="${(A.settings.theme || "system") === k ? "on" : ""}" data-a="theme" data-v="${k}">${t(k)}</button>`).join("")}</div>
     <h2>${t("data")}</h2>
-    <div class="sub mb8">${t("lastBackup", { d: A.settings.lastBackupAt ? dstr(A.settings.lastBackupAt) : t("never") })}</div>
-    <button class="btn primary block" data-a="exportJson">${t("exportJson")}</button>
-    <button class="btn ghost block mt8" data-a="exportCsv">${t("exportCsv")}</button>
-    <label class="btn ghost block mt8 filebtn">${t("importJson")}<input type="file" accept="application/json,.json" data-in="importFile" hidden></label>
+    <button class="btn ghost block" data-a="exportCsv">${t("exportCsv")}</button>
+    <label class="btn ghost block mt8 filebtn">${t("importJson")}<input type="file" accept=".json,.csv,.tsv,.txt,.md,.xlsx,image/*,text/*,application/json" data-in="impFile" hidden></label>
     ${disc.length ? `<h2>${t("discarded")}</h2><div class="card">${disc.map((s: Any) => `<div class="li"><span>${esc(nm(s.dayName))}<span class="sub block small">${sessionDate(s)}</span></span><button class="btn ghost small" data-a="restoreSession" data-id="${s.id}">${t("restore")}</button></div>`).join("")}</div>` : ""}
     <h2>${t("storage")}</h2><div class="card"><div class="sub">${A.persisted ? t("persisted") : t("notPersisted")}</div><div class="sub mt8">${t("installHint")}</div></div>
     <p class="faint small c mt16">Logbook ${VERSION}</p></div>`;
@@ -620,6 +866,13 @@ function vSheet() {
   } else if (sh.kind === "confirm") {
     inner = `<h3>${esc(sh.title)}</h3><p class="sub">${esc(sh.body)}</p><div class="row g8"><button class="btn ghost flex1" data-a="closeSheet">${t("cancel")}</button>
       <button class="btn ${sh.danger ? "ghost danger" : "primary"} flex1" data-a="confirmOk">${esc(sh.okLabel)}</button></div>`;
+  } else if (sh.kind === "rest") {
+    const n = Math.max(0, Math.round(parseFloat(sh.val) || 0));
+    inner = `<h3>${esc(sh.title)}</h3><div class="bigval num">${clock(n * 1000)}<small> (${n} ${t("sec")})</small></div>
+      <div class="steppers">${[-30, -15, 15, 30].map(k => `<button class="key num" data-a="kStep" data-v="${k}">${k < 0 ? "−" : "+"}${Math.abs(k)}</button>`).join("")}</div>
+      <div class="keys">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(k => `<button class="key num" data-a="kKey" data-v="${k}">${k}</button>`).join("")}
+      <button class="key" data-a="kKey" data-v="C">C</button><button class="key num" data-a="kKey" data-v="0">0</button><button class="key" data-a="kKey" data-v="del" aria-label="⌫">⌫</button></div>
+      <div class="row g8 mt8">${sh.running ? `<button class="btn ghost flex1" data-a="restOnce">${t("restOnce")}</button>` : ""}<button class="btn primary flex1" data-a="restAlways">${t("restAlways")}</button></div>`;
   } else if (sh.kind === "order") {
     const s = activeSession();
     inner = `<h3>${t("reorder")}</h3><p class="sub small">${t("dragTip")}</p><div class="sortable mt8" data-sort="wk">${s.exercises.map((x: Any, i: number) => {
@@ -721,7 +974,7 @@ app.addEventListener("click", async ev => {
       case "pause": if (s.pausedAt) { s.pausedMs += now() - s.pausedAt; s.pausedAt = null; } else s.pausedAt = now(); await saveSession(s); break;
       case "check": await toggleSet(s, +v); render(); centerStrip(); return;
       case "wNum": { const e = s.exercises[s.idx], x = e.sets[+v], f = d.f!, ex = exById(e.exId);
-        numSheet(f === "load" ? t("weight") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : { step: 1 }, async n => {
+        numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async n => {
           const old = x[f]; x[f] = n; x.edited = { ...(x.edited || {}), [f]: true };
           if (f === "load" && x.type !== "warmup") for (const y of e.sets.slice(+v + 1)) if (!y.done && !y.edited?.load && y.type !== "warmup" && y.load === old) y.load = n;
           await saveSession(s); }); return; }
@@ -733,7 +986,7 @@ app.addEventListener("click", async ev => {
         ]); return; }
       case "wAddSet": case "wAddWarm": { const e = s.exercises[s.idx]; const warm = a === "wAddWarm";
         const src = warm ? e.sets.find((x: Any) => x.type === "warmup") : [...e.sets].reverse().find((x: Any) => isWork(x));
-        const ns = { id: uid(), type: warm ? "warmup" : "working", load: src?.load ?? 0, reps: src?.reps ?? 8, rir: warm ? null : (src?.rir ?? 2), rpe: null, done: false, doneAt: null, edited: {}, last: null,
+        const ns = { id: uid(), type: warm ? "warmup" : "working", load: src?.load ?? 0, reps: src?.reps ?? 8, mins: src?.mins ?? (trackOf(e.exId) === "time" ? 10 : null), rir: warm || trackOf(e.exId) !== "wr" ? null : (src?.rir ?? 2), rpe: null, done: false, doneAt: null, edited: {}, last: null,
           t: src?.t ? { ...src.t } : { repsMin: 8, repsMax: 12, rir: warm ? null : 2, load: null } };
         if (warm) e.sets.unshift(ns); else e.sets.push(ns); await saveSession(s); break; }
       case "exMenu": { const e = s.exercises[s.idx];
@@ -745,6 +998,21 @@ app.addEventListener("click", async ev => {
         ]); return; }
       case "addToWorkout": go("pick", { mode: "addToWorkout" }); return;
       case "rest30": s.rest.endsAt += 30000; s.rest.total += 30; s.rest.buzzed = false; await saveSession(s); break;
+      case "restMinus": { s.rest.endsAt -= 30000; s.rest.total = Math.max(1, s.rest.total - 30); await saveSession(s); break; }
+      case "restEdit": { const e = s.exercises[s.idx], ex = exById(e.exId);
+        const cur = s.rest ? Math.round(s.rest.total) : (e.rest ?? ex?.rest ?? 120);
+        A.sheet = { kind: "rest", title: `${t("rest")} · ${nm(e.name)}`, val: String(cur), fresh: true, running: !!s.rest,
+          apply: async (n: number, always: boolean) => {
+            if (s.rest) { const st = s.rest.startAt ?? (s.rest.endsAt - s.rest.total * 1000); s.rest.total = n; s.rest.endsAt = st + n * 1000; s.rest.buzzed = false; }
+            if (always) {
+              e.rest = n;
+              for (const p of A.programs) for (const d of p.days) for (const pe of d.exercises) if (pe.id === e.peId) { pe.rest = n; await saveProgram(p); }
+              toast(t("restSaved", { n, x: nm(e.name) }));
+            }
+            await saveSession(s);
+          } };
+        break; }
+      case "restOnce": case "restAlways": { const n = Math.max(0, Math.round(parseFloat(sh.val) || 0)); A.sheet = null; await sh.apply(n, a === "restAlways"); break; }
       case "restSkip": s.rest = null; await saveSession(s); break;
       case "askFinish": askFinish(s); return;
       case "askDiscard": askDiscard(s); return;
@@ -756,7 +1024,7 @@ app.addEventListener("click", async ev => {
       case "calPrev": case "calNext": { const c = A.cal; c.m += a === "calNext" ? 1 : -1; if (c.m < 0) { c.m = 11; c.y--; } if (c.m > 11) { c.m = 0; c.y++; } break; }
       case "openSession": go("session", { id: d.id }); return;
       case "hNum": { const ss = A.sessions.find((x: Any) => x.id === d.id), e = ss.exercises[+d.e!], x = e.sets[+v], f = d.f!, ex = exById(e.exId);
-        numSheet(f === "load" ? t("weight") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : { step: 1 }, async n => { x[f] = n; await saveSession(ss); }); return; }
+        numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async n => { x[f] = n; await saveSession(ss); }); return; }
       case "hRir": { const ss = A.sessions.find((x: Any) => x.id === d.id), x = ss.exercises[+d.e!].sets[+v]; rirSheet("RIR", x.rir, async n => { x.rir = n; await saveSession(ss); }); return; }
       case "hDel": { const ss = A.sessions.find((x: Any) => x.id === d.id), e = ss.exercises[+d.e!], i = +v; const removed = e.sets.splice(i, 1)[0]; await saveSession(ss);
         toast(t("setDeleted"), async () => { e.sets.splice(i, 0, removed); await saveSession(ss); }); break; }
@@ -801,20 +1069,45 @@ app.addEventListener("click", async ev => {
       case "tplType": { const p = findProg(d.id!), pe = p.days[+d.d!].exercises[+d.e!], x = pe.sets[+v];
         menu(t("setType"), ["warmup", "working", "top", "backoff", "amrap", "drop"].map(k => ({ label: t(k), on: async () => { x.type = k; if (k === "warmup") x.rir = null; else if (x.rir == null) x.rir = 2; await saveProgram(p); } }))); return; }
       case "tplNum": { const p = findProg(d.id!), pe = p.days[+d.d!].exercises[+d.e!], x = pe.sets[+v], f = d.f!, ex = exById(pe.exId);
-        numSheet(f === "load" ? t("weight") : f === "repsMin" ? t("repsMin") : t("repsMax"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : { step: 1 },
+        numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : f === "repsMin" ? t("repsMin") : t("repsMax"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 },
           async n => { x[f] = n; if (f === "repsMin" && x.repsMax < n) x.repsMax = n; if (f === "repsMax" && x.repsMin > n) x.repsMin = n; await saveProgram(p); }); return; }
       case "tplRir": { const p = findProg(d.id!), x = p.days[+d.d!].exercises[+d.e!].sets[+v]; rirSheet("RIR", x.rir, async n => { x.rir = n; await saveProgram(p); }); return; }
       case "tplDel": { const p = findProg(d.id!), pe = p.days[+d.d!].exercises[+d.e!], i = +v; const removed = pe.sets.splice(i, 1)[0]; await saveProgram(p);
         toast(t("setDeleted"), async () => { pe.sets.splice(i, 0, removed); await saveProgram(p); }); break; }
       case "tplAdd": case "tplAddWarm": { const p = findProg(d.id!), pe = p.days[+d.d!].exercises[+d.e!]; const warm = a === "tplAddWarm";
         const src = warm ? null : [...pe.sets].reverse().find(isWork);
-        const ns = warm ? { id: uid(), type: "warmup", load: null, repsMin: 8, repsMax: 8, rir: null } : { ...(src || defaultTemplates()[0]), id: uid(), type: "working" };
+        const ns = warm ? { id: uid(), type: "warmup", load: null, repsMin: 8, repsMax: 8, rir: null } : { ...(src || defaultTemplates(trackOf(pe.exId))[0]), id: uid(), type: "working" };
         if (warm) pe.sets.unshift(ns); else pe.sets.push(ns); await saveProgram(p); break; }
       case "peRest": { const p = findProg(d.id!), pe = p.days[+d.d!].exercises[+d.e!], ex = exById(pe.exId);
         numSheet(t("restSec"), pe.rest ?? ex?.rest ?? 120, { step: 15, unit: t("sec") }, async n => { pe.rest = n; await saveProgram(p); }); return; }
       case "peGroup": { const p = findProg(d.id!), pe = p.days[+d.d!].exercises[+d.e!]; pe.group = v || null; await saveProgram(p); break; }
       // library
       case "libMuscle": A.qm = v; break;
+      case "exMetric": A.exMetric = v; break;
+      case "histM": A.histM = v; break;
+      case "openImport": A.imp = null; go("import", {}); return;
+      case "impReadText": { const txt = A.impText || ""; if (!txt.trim()) break; try { if (JSON.parse(txt)?.app === "logbook") { await importFile(new File([txt], "backup.json")); return; } } catch { }
+        showParsed(parseAny(txt), ""); return; }
+      case "impReset": A.imp = { stage: "input" }; break;
+      case "impDel": A.imp.days[+v].items.splice(+d.i!, 1); break;
+      case "impDelDay": A.imp.days.splice(+v, 1); break;
+      case "impPick": go("pick", { mode: "impItem", kind: d.kind || "plan", di: +v, ii: +d.i! }); return;
+      case "impKeepNew": { const ctx = JSON.parse(el.dataset.ctx || "{}"); const it = impTarget(ctx); if (it) { it.exId = null; it.isNew = true; } back(); return; }
+      case "impEdit": { const it = A.imp.days[+v].items[+d.i!];
+        const cur = `${it.sets.length} x ${it.sets[0]?.mins != null ? fmt(it.sets[0].mins) + " min" : it.sets.map((x: Any) => (x.type === "amrap" ? "max/" : "") + x.min + (x.max !== x.min ? "-" + x.max : "")).filter((x: string, i: number, a: string[]) => a.indexOf(x) === i).join(", ")}${it.rest ? " " + it.rest + "s" : ""}`;
+        textSheet(t("setsReps"), cur, async val => { const p = parseExerciseLine("Item " + val); if (p) { it.sets = p.sets; if (p.rest != null) it.rest = p.rest; } else toast(t("cantRead")); }); return; }
+      case "impCreate": { const im = A.imp; const days = im.days.filter((x: Any) => x.items.length); if (!days.length) break;
+        const { program, created } = buildProgramFromPlan(days, (im.name || t("importedPlan")).trim(), now(), A.lib);
+        for (const ex of created) await saveExercise(ex);
+        if (im.makeActive) { for (const q of A.programs) if (q.status === "active") { q.status = "inactive"; await saveProgram(q); } program.status = "active"; }
+        await saveProgram(program); A.programs.push(program); A.imp = null;
+        toast(t("planCreated", { d: program.days.length, n: created.length }));
+        A.nav = [{ v: "programs", p: {} }, { v: "program", p: { id: program.id } }]; break; }
+      case "impAddLog": { const im = A.imp;
+        const { sessions, created } = buildSessionsFromLog(im.sessions, now(), A.lib);
+        for (const ex of created) await saveExercise(ex);
+        await db.putMany("sessions", sessions); A.sessions.push(...sessions); A.imp = null;
+        toast(t("logsAdded", { n: sessions.length })); A.nav = [{ v: "history", p: {} }]; break; }
       case "openExercise": go("exercise", { id: d.id }); return;
       case "newExercise": A.form = null; go("exform", {}); return;
       case "exEdit": A.form = null; go("exform", { id: d.id }); return;
@@ -852,19 +1145,20 @@ async function reorder(ds: DOMStringMap, from: number, to: number) {
 
 async function picked(ctx: Any, exId: string) {
   const s = activeSession();
+  if (ctx.mode === "impItem") { const it = impTarget(ctx); if (it) { it.exId = exId; it.isNew = false; it.score = 1; } back(); return; }
   if (ctx.mode === "addToDay") {
-    const p = findProg(ctx.id); p.days[ctx.d].exercises.push({ id: uid(), exId, group: null, optional: false, rest: null, notes: "", sets: defaultTemplates() }); await saveProgram(p); back(); return;
+    const p = findProg(ctx.id); p.days[ctx.d].exercises.push({ id: uid(), exId, group: null, optional: false, rest: null, notes: "", sets: defaultTemplates(trackOf(exId)) }); await saveProgram(p); back(); return;
   }
   if (ctx.mode === "replacePe") { const p = findProg(ctx.id); p.days[ctx.d].exercises[ctx.e].exId = exId; await saveProgram(p); back(); return; }
   if (ctx.mode === "addToWorkout" && s) {
-    const pe = { id: null, exId, group: null, optional: false, rest: null, notes: "", sets: defaultTemplates() };
+    const pe = { id: null, exId, group: null, optional: false, rest: null, notes: "", sets: defaultTemplates(trackOf(exId)) };
     const se: Any = sessionExercise(pe); se.peId = null; s.exercises.push(se); s.idx = s.exercises.length - 1; await saveSession(s); back(); return;
   }
   if (ctx.mode === "substitute" && s) {
     const e = s.exercises[s.idx]; const ex = exById(exId); const lp = lastPerf(exId);
     e.exId = exId; e.name = ex.name;
     let wi = 0, ki = 0;
-    e.sets.forEach((x: Any) => { const prev = lp ? (x.type === "warmup" ? lp.warm[wi++] : lp.work[ki++]) : null; x.last = prev ? { load: prev.load, reps: prev.reps, rir: prev.rir } : null; if (!x.done) { x.load = prev ? prev.load : x.load; x.edited = {}; } });
+    e.sets.forEach((x: Any) => { const prev = lp ? (x.type === "warmup" ? lp.warm[wi++] : lp.work[ki++]) : null; x.last = prev ? { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null } : null; if (!x.done) { x.load = prev ? prev.load : x.load; x.edited = {}; if (ex.track === "time" && x.mins == null) x.mins = prev?.mins ?? 10; if (ex.track !== "wr") x.rir = null; } });
     await saveSession(s); back(); return;
   }
   back();
@@ -877,6 +1171,7 @@ let inputTimer: any = null;
 app.addEventListener("input", ev => {
   const el = ev.target as HTMLInputElement; const k = el.dataset?.in; if (!k) return;
   const d = el.dataset;
+  if (k === "impText") { A.impText = el.value; return; }
   if (k === "libQ") { A.q = el.value; const pos = el.selectionStart; render(); const n = app.querySelector(".search") as HTMLInputElement; if (n) { n.focus(); n.setSelectionRange(pos, pos); } return; }
   if (k === "fName") { A.form.name[d.v!] = el.value; return; }
   if (k === "fInc") { A.form.inc = parseFloat(el.value.replace(",", ".")) || 0; return; }
@@ -890,9 +1185,15 @@ app.addEventListener("input", ev => {
 });
 app.addEventListener("change", async ev => {
   const el = ev.target as HTMLInputElement; const k = el.dataset?.in; if (!k) return; const d = el.dataset;
-  if (k === "importFile" && el.files && el.files[0]) { await importFile(el.files[0]); return; }
+  if (k === "impFile" && el.files && el.files[0]) { const f = el.files[0]; el.value = ""; await handleImportFile(f); return; }
+  if (k === "impName") { A.imp.name = el.value; return; }
+  if (k === "impActive") { A.imp.makeActive = el.checked; return; }
+  if (k === "impDay") { A.imp.days[+d.v!].name = el.value; return; }
+  if (k === "impDate") { A.imp.sessions[+d.v!].date = el.value || null; return; }
   if (k === "fEq") { A.form.equipment = el.value; return; }
   if (k === "fLt") { A.form.loadType = el.value; return; }
+  if (k === "fTr") { A.form.track = el.value; return; }
+  if (k === "histEx") { A.histEx = el.value; render(); return; }
   if (k === "fPrim") { A.form.muscles = [{ m: el.value, role: "primary" }, ...A.form.muscles.filter((m: Any) => m.role === "secondary" && m.m !== el.value)]; render(); return; }
   if (k === "peOptional") { const p = findProg(d.id!); p.days[+d.d!].exercises[+d.e!].optional = el.checked; await saveProgram(p); return; }
   if (k === "sessionDate" && el.value) { const ss = A.sessions.find((x: Any) => x.id === d.id); const [y, m, dd] = el.value.split("-").map(Number);
@@ -969,3 +1270,4 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
 }
 
 boot();
+(window as any).__logbook = { preprocess }; // test hook: image clean-up used before OCR

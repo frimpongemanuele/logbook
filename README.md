@@ -2,7 +2,8 @@
 
 Personal workout log and progression tracker. Installable web app (PWA) for iPhone, works offline, stores all data on the device.
 
-- `src/` TypeScript source (no runtime dependencies): `domain.ts` calculations, `db.ts` IndexedDB, `seed.ts` exercise library + program, `data.ts` export/import, `app.ts` screens, `i18n.ts` English/Italian.
+- `src/` TypeScript source (no runtime dependencies): `domain.ts` calculations, `db.ts` IndexedDB, `seed.ts` exercise library, `data.ts` backup/CSV, `importer.ts` plan/workout import (text, CSV, Excel, OCR text), `app.ts` screens, `i18n.ts` English/Italian.
+- Image import loads Tesseract.js from jsDelivr on first use (runs on the device; language data cached after the first download).
 - `public/` the deployed site: compiled `js/`, `styles.css`, `sw.js` (offline cache), manifest and icons.
 - `tests/domain.test.mjs` unit tests for every calculation (`npm test`); `tests/e2e.mjs` browser flows on an iPhone-sized screen.
 

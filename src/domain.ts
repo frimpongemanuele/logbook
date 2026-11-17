@@ -6,6 +6,7 @@ export interface LoggedSet {
   type: SetType;
   load: number;
   reps: number;
+  mins?: number | null;
   rir: number | null;
   done: boolean;
   t?: { repsMin: number; repsMax: number; rir: number | null };
@@ -61,6 +62,7 @@ export interface Suggestion {
   inc: number;
   predicted: number | null; // predicted reps at the new top-set load (kind "up")
   predRir: number | null;
+  topNoLoad?: boolean;      // top of range reached but no load step exists: raise the rep target
 }
 
 /**
@@ -80,6 +82,10 @@ export function suggest(sets: LoggedSet[], inc: number): Suggestion | null {
   const loads = ws.map(s => s.load);
   const base: Suggestion = { kind: "hold", loads, adj, setNo: null, limitAdj: null, limitTarget: null, harder: false, unknownEffort, inc, predicted: null, predRir: null };
   const allTop = ws.every((s, i) => adj[i] >= s.t!.repsMax);
+  if (allTop && !(inc > 0)) {
+    // nothing to add load with (bodyweight / no step): progress by raising the rep target instead
+    return { ...base, kind: "reps", setNo: null, limitAdj: null, limitTarget: null, topNoLoad: true } as Suggestion;
+  }
   if (allTop) {
     const twoSteps = ws.every((s, i) => adj[i] >= s.t!.repsMax + 2);
     let step = inc;

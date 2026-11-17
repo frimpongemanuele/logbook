@@ -57,8 +57,8 @@ const LOG = [
   { en: "Legs", it: "Gambe", ex: [{ k: "squat", sets: [[40, 5, null, "w"], [60, 8, 2], [70, 8, null]] }, { k: "pullup", sets: [[0, 8, null]] }] },
 ];
 const prog = buildProgram(LOG, now, "Test"); const hist = buildHistory(LOG, now, prog, lib);
-test("library: 56 exercises, all ids unique, EN + IT names", () => {
-  assert.equal(ex.length, 56); assert.equal(new Set(ex.map(e => e.id)).size, 56);
+test("library: 74 exercises, all ids unique, EN + IT names", () => {
+  assert.equal(ex.length, 74); assert.equal(new Set(ex.map(e => e.id)).size, 74);
   assert.ok(ex.every(e => e.name.en && e.name.it && e.muscles.some(m => m.role === "primary")));
 });
 test("builder: days, exercises exist in library", () => {
