@@ -150,6 +150,9 @@ async function boot() {
         A.programs = await db.all("programs");
         A.sessions = await db.all("sessions");
         await migrateData();
+        for (const ss of A.sessions)
+            if (ss.status === "in_progress" && fillMissingLast(ss))
+                await saveSession(ss);
         A.settings = { ...A.settings, ...(await db.getMeta("settings", {})) };
         if (!(await db.getMeta("settings", null))) {
             A.settings.lang = (navigator.language || "").toLowerCase().startsWith("it") ? "it" : "en";
@@ -263,14 +266,17 @@ function buildSets(tpls, exId) {
     let wi = 0, ki = 0;
     return tpls.map((tp) => {
         const warm = tp.type === "warmup";
-        const prev = lp ? (warm ? lp.warm[wi++] : lp.work[ki++]) : null;
+        const pool = lp ? (warm ? lp.warm : lp.work) : [];
+        const pi = warm ? wi++ : ki++;
+        const prev = pool[pi] ?? pool[pool.length - 1] ?? null; // extra sets reuse the previous final set instead of showing "—"
+        const carry = !!prev && !pool[pi];
         const load = tp.load ?? prev?.load ?? 0;
         const reps = prev && prev.load === load ? Math.max(prev.reps, tp.repsMin) : tp.repsMin;
         const tr = trackOf(exId);
         const mins = tr === "time" ? (tp.mins ?? prev?.mins ?? 10) : null;
         return {
             id: uid(), type: tp.type, load: tr === "wr" ? load : 0, reps: tr === "time" ? 0 : reps, mins, rir: warm || tr !== "wr" ? null : tp.rir, rpe: null, done: false, doneAt: null, edited: {},
-            last: prev ? { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null } : null,
+            last: prev ? { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null, ...(carry ? { carry: true } : {}) } : null,
             t: { repsMin: tp.repsMin, repsMax: tp.repsMax, rir: tr === "wr" ? tp.rir : null, load: tp.load, mins: tp.mins ?? null },
         };
     });
@@ -301,6 +307,128 @@ async function startWorkout(program, dayIdx) {
     A.nav = [{ v: "today", p: {} }, { v: "workout", p: {} }];
     render();
     requestWake();
+}
+function fillMissingLast(s) {
+    let ch = false;
+    for (const e of s.exercises) {
+        const lp = lastPerf(e.exId, s.id);
+        if (!lp)
+            continue;
+        e.sets.forEach((x) => {
+            if (x.last || x.done)
+                return;
+            const pool = x.type === "warmup" ? lp.warm : lp.work;
+            const prev = pool[pool.length - 1];
+            if (!prev)
+                return;
+            x.last = { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null, carry: true };
+            ch = true;
+        });
+    }
+    return ch;
+}
+/* ---------------- editing the plan from inside a workout ---------------- */
+const planOf = (e) => { if (!e.peId)
+    return null; for (const p of A.programs)
+    for (const d of p.days) {
+        const pe = d.exercises.find((q) => q.id === e.peId);
+        if (pe)
+            return { p, d, pe };
+    } return null; };
+const planDay = (s) => { const p = A.programs.find((q) => q.id === s.programId); const d = p?.days.find((q) => q.id === s.dayId); return p && d ? { p, d } : null; };
+async function setGroup(s, members, g) {
+    const touched = new Set();
+    for (const m of members) {
+        m.group = g;
+        const r = planOf(m);
+        if (r) {
+            r.pe.group = g;
+            touched.add(r.p);
+        }
+    }
+    for (const p of touched)
+        await saveProgram(p);
+    await saveSession(s);
+}
+async function syncOrderToPlan(s) {
+    const pd = planDay(s);
+    if (!pd)
+        return;
+    const ids = s.exercises.map((x) => x.peId).filter(Boolean);
+    const slots = pd.d.exercises.map((pe, i) => (ids.includes(pe.id) ? i : -1)).filter((i) => i >= 0);
+    const ordered = ids.map((id) => pd.d.exercises.find((pe) => pe.id === id)).filter(Boolean);
+    if (ordered.length !== slots.length)
+        return;
+    slots.forEach((slot, k) => { pd.d.exercises[slot] = ordered[k]; });
+    await saveProgram(pd.p);
+}
+function templatesFromSets(e, old) {
+    return e.sets.map((x, i) => old[i] ? { ...old[i], type: x.type } : {
+        id: uid(), type: x.type, load: null, repsMin: x.t?.repsMin ?? x.reps ?? 8, repsMax: x.t?.repsMax ?? x.reps ?? 12, rir: x.t?.rir ?? null, ...(x.mins != null ? { mins: x.mins } : {})
+    });
+}
+function planMenu(s) {
+    const e = s.exercises[s.idx];
+    const r = planOf(e);
+    const nxt = s.exercises[s.idx + 1];
+    const members = e.group ? s.exercises.filter((x) => x.group === e.group) : [];
+    const items = [];
+    if (e.group) {
+        items.push({ label: t("pmUngroupAll", { g: e.group }), on: async () => { await setGroup(s, members, null); toast(t("pmDone")); } });
+        if (members.length > 2)
+            items.push({ label: t("pmLeave", { g: e.group }), on: async () => { await setGroup(s, [e], null); toast(t("pmDone")); } });
+    }
+    else if (nxt) {
+        items.push({ label: t("pmMakeSuper", { x: nm(nxt.name) }), on: async () => {
+                const used = new Set(s.exercises.map((x) => x.group).filter(Boolean));
+                const g = nxt.group || "ABCDEFGH".split("").find(c => !used.has(c)) || "A";
+                await setGroup(s, [e, nxt], g);
+                toast(t("pmDone"));
+            } });
+    }
+    items.push({ label: e.optional ? t("pmNotOptional") : t("pmOptional"), on: async () => { e.optional = !e.optional; if (r) {
+            r.pe.optional = e.optional;
+            await saveProgram(r.p);
+        } await saveSession(s); toast(t("pmDone")); } });
+    if (r)
+        items.push({ label: t("pmSaveSets"), on: async () => { r.pe.sets = templatesFromSets(e, r.pe.sets); await saveProgram(r.p); toast(t("pmDone")); } });
+    else if (planDay(s))
+        items.push({ label: t("pmAddToPlan"), on: async () => {
+                const pd = planDay(s);
+                const pe = { id: uid(), exId: e.exId, group: e.group || null, optional: !!e.optional, rest: e.rest ?? null, notes: e.notes || "", scheme: e.scheme || "straight", sets: templatesFromSets(e, []) };
+                pd.d.exercises.push(pe);
+                await saveProgram(pd.p);
+                e.peId = pe.id;
+                await saveSession(s);
+                toast(t("pmDone"));
+            } });
+    if (r) {
+        items.push({ label: t("pmRemovePlan"), danger: true, on: () => confirmSheet(t("pmRemovePlan"), t("pmRemovePlanQ", { x: nm(e.name) }), t("delete"), true, async () => {
+                r.d.exercises.splice(r.d.exercises.indexOf(r.pe), 1);
+                await saveProgram(r.p);
+                e.peId = null;
+                await saveSession(s);
+                toast(t("pmDone"));
+            }) });
+    }
+    if (!e.sets.some((x) => x.done))
+        items.push({ label: t("pmRemoveBoth"), danger: true, on: () => confirmSheet(t("pmRemoveBoth"), t("pmRemoveBothQ", { x: nm(e.name) }), t("delete"), true, async () => {
+                if (r) {
+                    r.d.exercises.splice(r.d.exercises.indexOf(r.pe), 1);
+                    await saveProgram(r.p);
+                }
+                const idx = s.exercises.indexOf(e);
+                s.exercises.splice(idx, 1);
+                if (e.group) {
+                    const left = s.exercises.filter((x) => x.group === e.group);
+                    if (left.length === 1)
+                        await setGroup(s, left, null);
+                }
+                s.idx = Math.min(s.idx, Math.max(0, s.exercises.length - 1));
+                await saveSession(s);
+                toast(t("pmDone"));
+            }) });
+    menu(t("pmTitle"), items);
 }
 /* ---------------- wake lock ---------------- */
 async function requestWake() {
@@ -344,11 +472,14 @@ function swipeRow(inner, acts, lp = "") {
 }
 const header = (title, right = "") => `<header class="hdr"><button class="iconbtn" data-a="back" aria-label="${t("back")}">${I.back}</button><div class="hdr-t">${esc(title)}</div><div class="hdr-r">${right}</div></header>`;
 /* ---------------- theme ---------------- */
+const ACCENTS = ["orange", "blue", "teal", "purple", "pink", "yellow", "mono"];
 const darkMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 function applyTheme() {
     const pref = A.settings.theme || "system";
     const resolved = pref === "system" ? (darkMq && darkMq.matches ? "dark" : "light") : pref;
     document.documentElement.dataset.theme = resolved;
+    document.documentElement.dataset.accent = A.settings.accent || "orange";
+    document.documentElement.dataset.cb = A.settings.cbSafe ? "1" : "0";
     document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute("content", resolved === "dark" ? "#0f1012" : "#f4f4f2"));
 }
 if (darkMq) {
@@ -490,7 +621,7 @@ function vWorkout(s) {
     const sets = e.sets.map((x, i) => {
         const g = (f) => (!x.done && !x.edited?.[f] ? "ghost" : "");
         const tr = ex?.track || "wr";
-        const last = x.last ? (tr === "wr" ? `<b>${loadTxt(ex, x.last.load)}×${x.last.reps}</b>${x.last.rir != null ? " @" + x.last.rir : ""}` : `<b>${setTxt(ex, x.last)}</b>`) : "—";
+        const last = x.last ? (x.last.carry ? '<span class="carry" title="' + esc(t("lastCarry")) + '">' : "<span>") + (tr === "wr" ? `<b>${loadTxt(ex, x.last.load)}×${x.last.reps}</b>${x.last.rir != null ? " @" + x.last.rir : ""}` : `<b>${setTxt(ex, x.last)}</b>`) + "</span>" : "—";
         const cells = tr === "time"
             ? `<button class="cell num span3 ${g("mins")}" data-a="wNum" data-f="mins" data-v="${i}" aria-label="${t("minutes")}">${fmt(x.mins)} <span class="unit">min</span></button>`
             : tr === "reps"
@@ -515,6 +646,7 @@ function vWorkout(s) {
       ${e.scheme && e.scheme !== "straight" ? `<span class="pill accent">${t("sch_" + e.scheme + "_s")}</span>` : ""}${e.optional ? `<span class="pill">${t("optional")}</span>` : ""}${e.skipped ? `<span class="pill warn">${t("skip")}</span>` : ""}${partner ? `<span class="pill accent">${t("superset")} ${esc(e.group)}: ${partner}</span>` : ""}</div>
     ${e.exId !== e.plannedExId ? `<div class="note">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
     ${e.notes ? `<div class="note">${esc(e.notes)}</div>` : ""}
+    <button class="notebtn" data-a="wNotes">✎ ${s.notes || e.notes ? t("wnEdit") : t("wnAdd")}${s.notes ? ` <i class="dotmark" aria-hidden="true"></i>` : ""}</button>
     <div class="sets-head"><span>${t("set")}</span><span>${t("last")}</span>${(ex?.track || "wr") === "wr" ? `<span class="c">${t("kg")}</span><span class="c">${t("reps")}</span><span class="c">${t("rir")}</span>` : `<span class="c span3">${(ex?.track) === "time" ? t("minutes") : t("reps")}</span>`}<span></span></div>
     ${sets}
     <div class="row mt4"><button class="addset flex1" data-a="wAddSet">+ ${t("addSet")}</button><button class="addset" style="flex:0 0 auto;padding:0 14px" data-a="wAddWarm">+ W</button></div>
@@ -1414,6 +1546,9 @@ function vMore() {
     <button class="btn ghost block" data-a="openFeedback">${t("sendFeedback")}</button>
     <button class="btn ghost block mt8" data-a="tourStart">${t("showTutorial")}</button>
     <h2>${t("language")}</h2><div class="seg"><button class="${L() === "en" ? "on" : ""}" data-a="lang" data-v="en">English</button><button class="${L() === "it" ? "on" : ""}" data-a="lang" data-v="it">Italiano</button></div>
+    <h2>${t("accentT")}</h2><div class="swatches" role="group" aria-label="${t("accentT")}">${ACCENTS.map(k => `<button class="sw sw-${k} ${(A.settings.accent || "orange") === k ? "on" : ""}" data-a="accent" data-v="${k}" aria-pressed="${(A.settings.accent || "orange") === k}" aria-label="${t("ac_" + k)}"><span>${(A.settings.accent || "orange") === k ? "✓" : ""}</span></button>`).join("")}</div>
+    <p class="sub small mt4">${t("ac_" + (A.settings.accent || "orange"))}</p>
+    <label class="toggle mt8"><input type="checkbox" ${A.settings.cbSafe ? "checked" : ""} data-a="cbSafe"> ${t("cbSafe")}</label><p class="faint small">${t("cbHelp")}</p>
     <h2>${t("theme")}</h2><div class="seg">${["system", "light", "dark"].map(k => `<button class="${(A.settings.theme || "system") === k ? "on" : ""}" data-a="theme" data-v="${k}">${t(k)}</button>`).join("")}</div>
     <h2>${t("data")}</h2>
     <button class="btn ghost block" data-a="exportCsv">${t("exportCsv")}</button>
@@ -1446,6 +1581,13 @@ function vSheet() {
     else if (sh.kind === "confirm") {
         inner = `<h3>${esc(sh.title)}</h3><p class="sub">${esc(sh.body)}</p><div class="row g8"><button class="btn ghost flex1" data-a="closeSheet">${t("cancel")}</button>
       <button class="btn ${sh.danger ? "ghost danger" : "primary"} flex1" data-a="confirmOk">${esc(sh.okLabel)}</button></div>`;
+    }
+    else if (sh.kind === "wnotes") {
+        const s = activeSession(), e = s.exercises[s.idx];
+        inner = `<h3>${t("wnTitle")}</h3>
+      ${e ? `<label class="lbl" for="wne">${t("wnExercise", { x: esc(nm(e.name)) })}</label><textarea id="wne" class="inp" rows="3" data-in="wExNote" placeholder="${esc(t("wnExPh"))}">${esc(e.notes || "")}</textarea>` : ""}
+      <label class="lbl" for="wns">${t("wnWorkout")}</label><textarea id="wns" class="inp" rows="3" data-in="wSesNote" placeholder="${esc(t("wnWkPh"))}">${esc(s.notes || "")}</textarea>
+      <p class="faint small mt8">${t("wnHint")}</p><button class="btn primary block mt8" data-a="closeSheet">${t("done")}</button>`;
     }
     else if (sh.kind === "share") {
         const p = findProg(A.share.id);
@@ -1581,6 +1723,14 @@ app.addEventListener("click", async (ev) => {
                 break;
             case "theme":
                 A.settings.theme = v;
+                await saveSettings();
+                break;
+            case "accent":
+                A.settings.accent = v;
+                await saveSettings();
+                break;
+            case "cbSafe":
+                A.settings.cbSafe = !A.settings.cbSafe;
                 await saveSettings();
                 break;
             case "closeSheet":
@@ -1764,11 +1914,15 @@ app.addEventListener("click", async (ev) => {
                     { label: e.skipped ? t("unskipEx") : t("skipEx"), on: async () => { e.skipped = !e.skipped; if (e.skipped && s.idx < s.exercises.length - 1)
                             s.idx++; await saveSession(s); if (e.skipped)
                             toast(t("exSkipped"), async () => { e.skipped = false; await saveSession(s); }); } },
-                    ...(s.idx > 0 ? [{ label: t("moveUp"), on: async () => { const x = s.exercises.splice(s.idx, 1)[0]; s.exercises.splice(--s.idx, 0, x); await saveSession(s); } }] : []),
-                    ...(s.idx < s.exercises.length - 1 ? [{ label: t("moveDown"), on: async () => { const x = s.exercises.splice(s.idx, 1)[0]; s.exercises.splice(++s.idx, 0, x); await saveSession(s); } }] : []),
+                    ...(s.idx > 0 ? [{ label: t("moveUp"), on: async () => { const x = s.exercises.splice(s.idx, 1)[0]; s.exercises.splice(--s.idx, 0, x); await saveSession(s); await syncOrderToPlan(s); } }] : []),
+                    ...(s.idx < s.exercises.length - 1 ? [{ label: t("moveDown"), on: async () => { const x = s.exercises.splice(s.idx, 1)[0]; s.exercises.splice(++s.idx, 0, x); await saveSession(s); await syncOrderToPlan(s); } }] : []),
+                    { label: t("pmTitle") + "…", on: () => planMenu(s) },
                 ]);
                 return;
             }
+            case "wNotes":
+                A.sheet = { kind: "wnotes" };
+                break;
             case "addToWorkout":
                 go("pick", { mode: "addToWorkout" });
                 return;
@@ -2447,6 +2601,7 @@ async function reorder(ds, from, to) {
         moveItem(s.exercises, from, to);
         s.idx = s.exercises.indexOf(cur);
         await saveSession(s);
+        await syncOrderToPlan(s);
     }
 }
 async function picked(ctx, exId) {
@@ -2509,6 +2664,16 @@ async function picked(ctx, exId) {
 function centerStrip() { const st = document.getElementById("strip"); const on = st && st.querySelector(".on"); if (on)
     on.scrollIntoView({ inline: "center", block: "nearest" }); }
 /* inputs */
+// iPhone shows "Undo Typing" when the phone is shaken/set down and any text field still has edit history.
+// Resetting the field's value on blur clears that history (the text itself is unchanged).
+document.addEventListener("focusout", ev => {
+    const el = ev.target;
+    if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && /^(text|search|)$/.test(el.type)))) {
+        const v = el.value;
+        el.value = "";
+        el.value = v;
+    }
+}, true);
 let inputTimer = null;
 app.addEventListener("input", ev => {
     const el = ev.target;
@@ -2547,12 +2712,26 @@ app.addEventListener("input", ev => {
         A.form.rest = parseInt(el.value) || 0;
         return;
     }
+    if (k === "wExNote" || k === "wSesNote") { // keep memory current at once; only the disk write is debounced
+        const ss = activeSession();
+        if (ss) {
+            if (k === "wSesNote")
+                ss.notes = el.value;
+            else if (ss.exercises[ss.idx])
+                ss.exercises[ss.idx].notes = el.value;
+        }
+    }
     clearTimeout(inputTimer);
     inputTimer = setTimeout(async () => {
         if (k === "progName" || k === "progDesc") {
             const p = findProg(d.id);
             p[k === "progName" ? "name" : "description"] = el.value;
             await saveProgram(p);
+        }
+        if (k === "wExNote" || k === "wSesNote") {
+            const ss = activeSession();
+            if (ss)
+                await saveSession(ss);
         }
         if (k === "sessionNotes") {
             const ss = A.sessions.find((x) => x.id === d.id);
