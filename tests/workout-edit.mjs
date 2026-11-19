@@ -80,6 +80,15 @@ try {
   ok("Colour-blind mode swaps green for blue", css.cb === "1" && css.done.toLowerCase() === "#0072b2");
   ok("Selected swatch shows a tick, not only colour", (await page.textContent(".sw.on")).includes("✓"));
   await page.screenshot({ path: "tests/shots/32-colours.png" });
+  // --- swipe action buttons are invisible unless a row is swiped / open (no red flash while fast-scrolling)
+  await page.click('.tabbar [data-a="tab"][data-v="library"]'); await page.waitForSelector(".swipe");
+  ok("Delete buttons hidden on idle rows", await page.$$eval(".swipe-acts", els => els.length > 5 && els.every(e => getComputedStyle(e).visibility === "hidden")));
+  ok("No row is promoted to its own layer while idle", await page.$$eval(".swipe-in", els => els.every(e => getComputedStyle(e).willChange === "auto")));
+  const rb = await page.$eval(".swipe-in", e => { const r = e.getBoundingClientRect(); return [r.left, r.top + r.height / 2, r.width]; });
+  await page.touchscreen.tap(1, 1);
+  await page.evaluate(([x, y, w]) => { const el = document.elementFromPoint(x + w / 2, y); const mk = (t, dx) => el.dispatchEvent(new PointerEvent(t, { bubbles: true, pointerId: 7, pointerType: "touch", clientX: x + w / 2 + dx, clientY: y, isPrimary: true })); mk("pointerdown", 0); mk("pointermove", -30); mk("pointermove", -120); mk("pointerup", -120); }, rb);
+  await page.waitForTimeout(350);
+  ok("Swiping a row reveals its buttons", await page.$$eval(".swipe.open .swipe-acts", els => els.length === 1 && getComputedStyle(els[0]).visibility === "visible"));
   await page.reload(); await page.waitForSelector("h1");
   ok("Colour choice survives restart", (await page.evaluate(() => document.documentElement.dataset.accent)) === "blue");
 } catch (e) { results.push(["FAIL", "exception: " + e.message.split("\n").slice(0,3).join(" ")]); await page.screenshot({ path: "tests/shots/zz-error2.png" }); }
