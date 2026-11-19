@@ -109,6 +109,15 @@ const en = {
     addProgram: "Add program", sharedAdded: "Added “{x}”",
     openInApp: "Open it in your Logbook app", openInApp1: "Copy the link below.", openInApp2: "Open Logbook from your Home Screen.", openInApp3: "More → Import → paste it → Read pasted text.",
     copyLinkBtn: "Copy link", importHere: "Add it here in Safari instead",
+    lastCarry: "From your last set of this exercise",
+    accentT: "Accent colour", cbSafe: "Colour-blind friendly status colours", cbHelp: "Done sets, gains and warnings use blue / yellow / orange instead of green / red. Sets also show a ✓.",
+    ac_orange: "Orange", ac_blue: "Blue", ac_teal: "Teal", ac_purple: "Purple", ac_pink: "Pink", ac_yellow: "Yellow", ac_mono: "Monochrome",
+    pmTitle: "Change the plan", pmDone: "Plan updated", pmUngroupAll: "Remove superset {g} (plan too)", pmLeave: "Take this exercise out of superset {g}",
+    pmMakeSuper: "Superset with {x}", pmOptional: "Mark as optional", pmNotOptional: "Make it not optional", pmSaveSets: "Save these sets to the plan",
+    pmAddToPlan: "Add this exercise to the plan", pmRemovePlan: "Remove from plan", pmRemovePlanQ: "“{x}” is removed from the plan from now on. This workout keeps it.",
+    pmRemoveBoth: "Remove from workout and plan", pmRemoveBothQ: "“{x}” is removed from this workout and from the plan.",
+    wnAdd: "Add note", wnEdit: "Notes", wnTitle: "Notes", wnExercise: "About {x}", wnWorkout: "About the whole workout", wnExPh: "e.g. elbow pinched, change grip", wnWkPh: "e.g. slept badly, short on time",
+    wnHint: "Saved as you type. Shown in History and when you finish.",
 };
 const it = {
     planLbl: "piano",
@@ -221,6 +230,15 @@ const it = {
     addProgram: "Aggiungi scheda", sharedAdded: "Aggiunta “{x}”",
     openInApp: "Aprila nella tua app Logbook", openInApp1: "Copia il link qui sotto.", openInApp2: "Apri Logbook dalla schermata Home.", openInApp3: "Altro → Importa → incollalo → Leggi testo incollato.",
     copyLinkBtn: "Copia link", importHere: "Aggiungila qui in Safari",
+    lastCarry: "Dall'ultima serie di questo esercizio",
+    accentT: "Colore principale", cbSafe: "Colori di stato per daltonici", cbHelp: "Serie fatte, miglioramenti e avvisi usano blu / giallo / arancione al posto di verde / rosso. Le serie mostrano anche ✓.",
+    ac_orange: "Arancione", ac_blue: "Blu", ac_teal: "Turchese", ac_purple: "Viola", ac_pink: "Rosa", ac_yellow: "Giallo", ac_mono: "Monocromatico",
+    pmTitle: "Modifica la scheda", pmDone: "Scheda aggiornata", pmUngroupAll: "Rimuovi superserie {g} (anche dalla scheda)", pmLeave: "Togli questo esercizio dalla superserie {g}",
+    pmMakeSuper: "Superserie con {x}", pmOptional: "Segna come facoltativo", pmNotOptional: "Rendi non facoltativo", pmSaveSets: "Salva queste serie nella scheda",
+    pmAddToPlan: "Aggiungi questo esercizio alla scheda", pmRemovePlan: "Rimuovi dalla scheda", pmRemovePlanQ: "“{x}” viene tolto dalla scheda da ora in poi. Questo allenamento lo mantiene.",
+    pmRemoveBoth: "Rimuovi da allenamento e scheda", pmRemoveBothQ: "“{x}” viene tolto da questo allenamento e dalla scheda.",
+    wnAdd: "Aggiungi nota", wnEdit: "Note", wnTitle: "Note", wnExercise: "Su {x}", wnWorkout: "Sull'intero allenamento", wnExPh: "es. gomito fastidioso, cambia presa", wnWkPh: "es. dormito male, poco tempo",
+    wnHint: "Salvate mentre scrivi. Le trovi nello Storico e a fine allenamento.",
 };
 const DICT = { en, it };
 let lang = "en";

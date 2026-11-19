@@ -245,3 +245,29 @@ button,.tabbar,.strip,.set,.badge{-webkit-user-select:none;user-select:none}
 .tour-card h3{margin:6px 0 6px;font-size:20px}
 .tour-body p{margin:0 0 8px;color:var(--muted);line-height:1.45}
 .tour-dots{display:flex;gap:5px} .tour-dots i{width:6px;height:6px;border-radius:3px;background:var(--surface2)} .tour-dots i.on{width:16px;background:var(--accent)}
+
+/* accent palettes — dark first, then light variants */
+html[data-accent="blue"]{--accent:#4da3ff;--accent-ink:#001a33;--accent-soft:rgba(77,163,255,.15)}
+html[data-accent="teal"]{--accent:#2dd4bf;--accent-ink:#00201c;--accent-soft:rgba(45,212,191,.14)}
+html[data-accent="purple"]{--accent:#b595ff;--accent-ink:#1a0a3a;--accent-soft:rgba(181,149,255,.15)}
+html[data-accent="pink"]{--accent:#ff77b4;--accent-ink:#3a0020;--accent-soft:rgba(255,119,180,.15)}
+html[data-accent="yellow"]{--accent:#ffd23f;--accent-ink:#2a2000;--accent-soft:rgba(255,210,63,.14)}
+html[data-accent="mono"]{--accent:#e9e9e6;--accent-ink:#111;--accent-soft:rgba(233,233,230,.12)}
+html[data-theme="light"][data-accent="blue"]{--accent:#0b5fc2;--accent-ink:#fff;--accent-soft:rgba(11,95,194,.10)}
+html[data-theme="light"][data-accent="teal"]{--accent:#0a7a6c;--accent-ink:#fff;--accent-soft:rgba(10,122,108,.10)}
+html[data-theme="light"][data-accent="purple"]{--accent:#6b3fc7;--accent-ink:#fff;--accent-soft:rgba(107,63,199,.10)}
+html[data-theme="light"][data-accent="pink"]{--accent:#be1558;--accent-ink:#fff;--accent-soft:rgba(190,21,88,.10)}
+html[data-theme="light"][data-accent="yellow"]{--accent:#7a5c00;--accent-ink:#fff;--accent-soft:rgba(122,92,0,.12)}
+html[data-theme="light"][data-accent="mono"]{--accent:#222;--accent-ink:#fff;--accent-soft:rgba(0,0,0,.08)}
+/* colour-blind friendly status colours (Okabe–Ito): blue = done/up, vermillion = down, yellow = warning */
+html[data-cb="1"]{--done:#56b4e9;--done-soft:rgba(86,180,233,.15);--warn:#f0e442;--danger:#ff8a4c}
+html[data-cb="1"][data-theme="light"]{--done:#0072b2;--done-soft:rgba(0,114,178,.10);--warn:#6f6200;--danger:#b24400}
+.swatches{display:flex;gap:10px;flex-wrap:wrap}
+.sw{width:44px;height:44px;border-radius:99px;border:2px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px}
+.sw.on{border-color:var(--text)}
+.sw span{color:#111}
+.sw-orange{background:#ff7a1a}.sw-blue{background:#4da3ff}.sw-teal{background:#2dd4bf}.sw-purple{background:#b595ff}.sw-pink{background:#ff77b4}.sw-yellow{background:#ffd23f}.sw-mono{background:#e9e9e6}
+/* workout additions */
+.carry{opacity:.6}
+.notebtn{display:inline-flex;align-items:center;gap:6px;margin:2px 0 10px;padding:8px 12px;border-radius:99px;background:var(--surface2);color:var(--muted);font-size:14px;font-weight:600;min-height:36px}
+.dotmark{width:8px;height:8px;border-radius:99px;background:var(--accent);display:inline-block}
