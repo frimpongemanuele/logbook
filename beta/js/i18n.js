@@ -121,6 +121,9 @@ const en = {
     ex_speed: "Speed", ex_incline: "Incline", ex_speed_h: "km/h", ex_incline_h: "Incl. %", min: "Min", extrasT: "Also record per set",
     rwTitle: "Remove from this workout", rwBody: "“{x}” is removed from today's workout only. Your plan stays as it is.",
     rwBodyLogged: "“{x}” is removed from today's workout, including its {n} logged sets. Your plan stays as it is.", rwDone: "Removed from this workout",
+    restAlertT: "Rest timer alert", restVibrate: "Vibrate when rest is over", restSound: "Beep when rest is over", restLock: "Alert with the screen locked (and on Apple Watch)",
+    restAlertHelp: "iPhone web apps can't vibrate with the screen off. The lock-screen option sends a notification when rest ends — it buzzes your Apple Watch when the phone is locked — and plays a silent sound during rests to keep the timer running, which pauses music from other apps.",
+    restOverTitle: "Rest over — next set", restOverBody: "Time to lift.", restLockNoSupport: "This browser can't show notifications", restLockInstall: "Add Logbook to your Home Screen first, then enable this from the app", restLockDenied: "Notifications are blocked — allow them in iPhone Settings → Notifications → Logbook",
 };
 const it = {
     planLbl: "piano",
@@ -245,6 +248,9 @@ const it = {
     ex_speed: "Velocità", ex_incline: "Inclinazione", ex_speed_h: "km/h", ex_incline_h: "Incl. %", min: "Min", extrasT: "Registra anche per serie",
     rwTitle: "Rimuovi da questo allenamento", rwBody: "“{x}” viene tolto solo dall'allenamento di oggi. La scheda resta com'è.",
     rwBodyLogged: "“{x}” viene tolto dall'allenamento di oggi, comprese le {n} serie registrate. La scheda resta com'è.", rwDone: "Rimosso da questo allenamento",
+    restAlertT: "Avviso fine recupero", restVibrate: "Vibra a fine recupero", restSound: "Suono a fine recupero", restLock: "Avviso a schermo bloccato (e su Apple Watch)",
+    restAlertHelp: "Le app web su iPhone non possono vibrare a schermo spento. L'opzione a schermo bloccato invia una notifica a fine recupero — fa vibrare l'Apple Watch quando il telefono è bloccato — e riproduce un suono silenzioso durante i recuperi per tenere attivo il timer, il che mette in pausa la musica di altre app.",
+    restOverTitle: "Recupero finito — prossima serie", restOverBody: "È ora di sollevare.", restLockNoSupport: "Questo browser non può mostrare notifiche", restLockInstall: "Aggiungi prima Logbook alla schermata Home, poi attivalo dall'app", restLockDenied: "Le notifiche sono bloccate — consentile in Impostazioni iPhone → Notifiche → Logbook",
 };
 const DICT = { en, it };
 let lang = "en";

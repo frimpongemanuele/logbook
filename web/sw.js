@@ -17,3 +17,10 @@ self.addEventListener("fetch", e => {
     return hit || net;
   }));
 });
+
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(cs => {
+    const mine = cs.find(c => c.url.startsWith(self.registration.scope)); return mine ? mine.focus() : self.clients.openWindow(self.registration.scope);
+  }));
+});

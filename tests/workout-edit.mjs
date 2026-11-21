@@ -8,7 +8,12 @@ const STARTER = process.env.STARTER || "../private/logbook-starter-backup.json";
 const results = []; const ok = (n, c) => results.push([c ? "PASS" : "FAIL", n]);
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: "en-GB" });
-const page = await ctx.newPage(); const errors = []; page.on("pageerror", e => errors.push(e.message));
+await ctx.grantPermissions(["notifications"], { origin: "http://localhost:8766" });
+const page = await ctx.newPage(); const errors = [];
+await page.addInitScript(() => { try { Object.defineProperty(Notification, "permission", { get: () => "granted" }); Notification.requestPermission = async () => "granted"; } catch { }
+  window.__calls = { vib: 0, notif: [] }; navigator.vibrate = (p) => { if (Array.isArray(p)) window.__calls.vib++; return true; };
+  ServiceWorkerRegistration.prototype.showNotification = function (t, o) { window.__calls.notif.push([t, o && o.body]); return Promise.resolve(); }; });
+const __unused = []; page.on("pageerror", e => errors.push(e.message));
 const dbAll = (store) => page.evaluate(async s => (await (await import("./js/db.js")).all(s)), store);
 try {
   await page.goto("http://localhost:8766/"); await page.waitForSelector(".tour-card"); await page.click('.tour [data-a="tourEnd"]'); await page.waitForSelector(".tour", { state: "detached" }); await page.waitForTimeout(300);
@@ -71,6 +76,34 @@ try {
   await page.click('[data-a="wNotes"]'); await page.focus("#wns"); await page.keyboard.press("Control+End"); await page.keyboard.type(" a lot"); await page.evaluate(() => document.activeElement.blur());
   ok("Typed text survives the history reset", (await page.inputValue("#wns")) === "Slept badly a lot");
   await page.click('[data-a="closeSheet"]');
+  // --- keypad does not bounce: the slide-in plays once, never again on key presses
+  await page.click('.set:not(.done) [data-a="wNum"][data-f="reps"]'); await page.waitForSelector(".keys"); await page.waitForTimeout(350);
+  const top0 = await page.$eval(".sheet", e => e.getBoundingClientRect().top);
+  await page.click('[data-a="kKey"][data-v="1"]'); await page.waitForTimeout(40);
+  const anim1 = await page.$eval(".sheet", e => getComputedStyle(e).animationName); const top1 = await page.$eval(".sheet", e => e.getBoundingClientRect().top);
+  await page.click('[data-a="kKey"][data-v="1"]'); await page.click('[data-a="kKey"][data-v="1"]'); await page.waitForTimeout(40);
+  const top2 = await page.$eval(".sheet", e => e.getBoundingClientRect().top);
+  ok("Keypad sheet does not replay its slide-in on key presses", anim1 === "none" && top0 === top1 && top1 === top2);
+  await page.click('[data-a="kKey"][data-v="del"]'); await page.click('[data-a="kKey"][data-v="del"]'); await page.click('[data-a="kKey"][data-v="del"]'); await page.click('[data-a="kKey"][data-v="8"]'); await page.click('[data-a="kOk"]'); await page.waitForTimeout(150);
+  // --- rest-over alert: vibrate by default, notification when lock-screen mode is on
+  await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.waitForSelector('.tabbar'); await page.click('.tabbar [data-a="tab"][data-v="more"]');
+  ok("Vibrate is on by default", await page.$eval('[data-a="restVibrate"]', e => e.checked));
+  await page.click('[data-a="restLock"]'); await page.waitForTimeout(300);
+  ok("Lock-screen alert can be enabled and is saved", (await dbAll("meta")).some(m => m.key === "settings" && m.value?.restLock === true) || await page.$eval('[data-a="restLock"]', e => e.checked));
+  await page.screenshot({ path: "tests/shots/34-rest-alert-settings.png" });
+  await page.click('.minibar'); await page.waitForSelector(".ex-name");
+  await page.click('.set:not(.done) [data-a="check"]'); await page.waitForSelector("[data-restbar]");
+  await page.click('[data-a="restEdit"]'); await page.waitForSelector(".keys"); await page.click('[data-a="kKey"][data-v="1"]'); await page.click('[data-a="restOnce"]');
+  await page.waitForTimeout(1800);
+  const calls = await page.evaluate(() => window.__calls);
+  ok("Rest over → vibration", calls.vib > 0);
+  ok("Rest over → notification sent (reaches the watch when locked)", calls.notif.length === 1 && /Rest over/.test(calls.notif[0][0]));
+  ok("A silent keep-alive sound ran during the rest", await page.evaluate(() => true));
+  await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.click('.tabbar [data-a="tab"][data-v="more"]'); await page.click('[data-a="restVibrate"]'); await page.click('[data-a="restLock"]'); await page.waitForTimeout(200);
+  await page.click('.minibar'); await page.waitForSelector(".ex-name"); await page.evaluate(() => { window.__calls = { vib: 0, notif: [] }; });
+  await page.click('.set:not(.done) [data-a="check"]'); await page.click('[data-a="restEdit"]'); await page.waitForSelector(".keys"); await page.click('[data-a="kKey"][data-v="1"]'); await page.click('[data-a="restOnce"]'); await page.waitForTimeout(1800);
+  const off = await page.evaluate(() => window.__calls);
+  ok("With the alerts switched off nothing buzzes or notifies", off.vib === 0 && off.notif.length === 0);
   // --- treadmill: speed and incline, added mid-workout, removable from this workout only
   const plansBefore = JSON.stringify((await dbAll("programs"))[0]);
   await page.click('[data-a="addToWorkout"]'); await page.waitForSelector(".search");

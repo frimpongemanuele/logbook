@@ -79,6 +79,146 @@ function haptic() {
     }
     catch { /* best effort */ }
 }
+/* ---------------- rest-over alert: vibrate · beep · lock-screen notification (reaches the Apple Watch) ----------------
+   iPhone web apps cannot vibrate on demand, so this uses what iOS does allow: a haptic tap while the app is open, a beep,
+   and a notification. To keep the timer alive with the screen locked a silent sound plays during rests (this pauses music from other apps). */
+function wavUri(secs, fn, rate = 8000) {
+    const n = Math.floor(secs * rate), buf = new Uint8Array(44 + n * 2), v = new DataView(buf.buffer);
+    const w = (o, str) => { for (let i = 0; i < str.length; i++)
+        buf[o + i] = str.charCodeAt(i); };
+    w(0, "RIFF");
+    v.setUint32(4, 36 + n * 2, true);
+    w(8, "WAVEfmt ");
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true);
+    v.setUint32(28, rate * 2, true);
+    v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true);
+    w(36, "data");
+    v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++)
+        v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, fn(i / rate))) * 32767, true);
+    let bin = "";
+    for (let i = 0; i < buf.length; i++)
+        bin += String.fromCharCode(buf[i]);
+    return "data:audio/wav;base64," + btoa(bin);
+}
+let SILENT_WAV = "", BEEP_WAV = "";
+const silentWav = () => SILENT_WAV || (SILENT_WAV = wavUri(1, () => 0));
+const beepWav = () => BEEP_WAV || (BEEP_WAV = wavUri(1.1, t => { const k = t % 0.36; return t < 1.08 && k < 0.2 ? Math.sin(2 * Math.PI * 880 * t) * 0.6 * Math.min(1, k * 60, (0.2 - k) * 60) : 0; }));
+let alertAudio = null;
+const wantsAudio = () => !!(A.settings.restSound || A.settings.restLock);
+function audioSessionType(type) { try {
+    const as = navigator.audioSession;
+    if (as)
+        as.type = type;
+}
+catch { } }
+/** Call inside a tap: unlocks audio, and (lock-screen mode) starts the silent loop that keeps the timer running while locked. */
+function armRestAudio() {
+    if (!wantsAudio())
+        return;
+    try {
+        alertAudio = alertAudio || new Audio();
+        const a = alertAudio;
+        a.setAttribute("playsinline", "");
+        a.onended = null;
+        audioSessionType(A.settings.restLock ? "playback" : "ambient");
+        a.src = silentWav();
+        a.loop = !!A.settings.restLock;
+        a.volume = 1;
+        const pr = a.play();
+        if (pr && pr.then)
+            pr.then(() => { if (!A.settings.restLock)
+                a.pause(); }).catch(() => { });
+    }
+    catch { /* best effort */ }
+}
+function stopRestAudio() { try {
+    if (alertAudio) {
+        alertAudio.loop = false;
+        alertAudio.pause();
+    }
+    audioSessionType("auto");
+}
+catch { } }
+function buzz() {
+    const nav = navigator;
+    if (nav.vibrate && nav.vibrate([220, 110, 220, 110, 420]))
+        return;
+    haptic();
+    setTimeout(haptic, 160);
+    setTimeout(haptic, 320); // iPhone: haptic taps while the app is open
+}
+function beep() {
+    try {
+        const a = alertAudio || (alertAudio = new Audio());
+        a.loop = false;
+        a.src = beepWav();
+        a.currentTime = 0;
+        a.onended = () => stopRestAudio();
+        const pr = a.play();
+        if (pr && pr.catch)
+            pr.catch(() => { });
+    }
+    catch { }
+}
+async function notifyRestOver(s) {
+    try {
+        if (typeof Notification === "undefined" || Notification.permission !== "granted" || !("serviceWorker" in navigator))
+            return;
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (!reg)
+            return;
+        const nu = nextUp(s);
+        await reg.showNotification(t("restOverTitle"), { body: nu ? `${t("nextUp")}: ${nu}` : t("restOverBody"), tag: "rest-over", renotify: true, silent: false, icon: "icons/icon-192.png", vibrate: [220, 110, 220, 110, 420] });
+    }
+    catch { /* best effort */ }
+}
+function restAlert(s) {
+    if (!s.rest || now() - s.rest.endsAt > 10000)
+        return; // opened the app long after the rest ended: stay quiet
+    if (A.settings.restVibrate !== false)
+        buzz();
+    if (A.settings.restSound)
+        beep();
+    if (A.settings.restLock) {
+        notifyRestOver(s);
+        if (!A.settings.restSound)
+            setTimeout(stopRestAudio, 800);
+    }
+    else if (!A.settings.restSound)
+        stopRestAudio();
+}
+async function setRestLock(on) {
+    if (!on) {
+        A.settings.restLock = false;
+        stopRestAudio();
+        return;
+    }
+    if (typeof Notification === "undefined") {
+        toast(t("restLockNoSupport"));
+        return;
+    }
+    if (isIOS() && !standalone()) {
+        toast(t("restLockInstall"));
+        return;
+    }
+    let perm = Notification.permission;
+    if (perm === "default") {
+        try {
+            perm = await Notification.requestPermission();
+        }
+        catch { }
+    }
+    if (perm !== "granted") {
+        toast(t("restLockDenied"));
+        return;
+    }
+    A.settings.restLock = true;
+}
 function toast(msg, undo) {
     A.toast = { msg, undo };
     clearTimeout(toastTimer);
@@ -476,7 +616,7 @@ async function requestWake() {
 function releaseWake() { try {
     wakeLock && wakeLock.release();
 }
-catch { } wakeLock = null; }
+catch { } wakeLock = null; stopRestAudio(); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) {
     render();
     requestWake();
@@ -1588,6 +1728,11 @@ function vMore() {
     <h2>${t("accentT")}</h2><div class="swatches" role="group" aria-label="${t("accentT")}">${ACCENTS.map(k => `<button class="sw sw-${k} ${(A.settings.accent || "orange") === k ? "on" : ""}" data-a="accent" data-v="${k}" aria-pressed="${(A.settings.accent || "orange") === k}" aria-label="${t("ac_" + k)}"><span>${(A.settings.accent || "orange") === k ? "✓" : ""}</span></button>`).join("")}</div>
     <p class="sub small mt4">${t("ac_" + (A.settings.accent || "orange"))}</p>
     <label class="toggle mt8"><input type="checkbox" ${A.settings.cbSafe ? "checked" : ""} data-a="cbSafe"> ${t("cbSafe")}</label><p class="faint small">${t("cbHelp")}</p>
+    <h2>${t("restAlertT")}</h2>
+    <label class="toggle"><input type="checkbox" ${A.settings.restVibrate !== false ? "checked" : ""} data-a="restVibrate"> ${t("restVibrate")}</label>
+    <label class="toggle"><input type="checkbox" ${A.settings.restSound ? "checked" : ""} data-a="restSound"> ${t("restSound")}</label>
+    <label class="toggle"><input type="checkbox" ${A.settings.restLock ? "checked" : ""} data-a="restLock"> ${t("restLock")}</label>
+    <p class="faint small">${t("restAlertHelp")}</p>
     <h2>${t("theme")}</h2><div class="seg">${["system", "light", "dark"].map(k => `<button class="${(A.settings.theme || "system") === k ? "on" : ""}" data-a="theme" data-v="${k}">${t(k)}</button>`).join("")}</div>
     <h2>${t("data")}</h2>
     <button class="btn ghost block" data-a="exportCsv">${t("exportCsv")}</button>
@@ -1602,6 +1747,8 @@ function vMore() {
 function vSheet() {
     const sh = A.sheet;
     let inner = "";
+    const still = !!sh.shown;
+    sh.shown = true; // animate only when a sheet first opens, not on every re-render
     if (sh.kind === "num") {
         inner = `<h3>${esc(sh.title)}</h3><div class="bigval num">${esc(sh.val === "" ? "0" : sh.val)}<small> ${sh.unit || ""}</small></div>
       ${sh.step ? `<div class="steppers">${[-2, -1, 1, 2].map(k => `<button class="key num" data-a="kStep" data-v="${k * sh.step}">${k < 0 ? "−" : "+"}${fmt(Math.abs(k * sh.step))}</button>`).join("")}</div>` : ""}
@@ -1653,7 +1800,7 @@ function vSheet() {
     else if (sh.kind === "text") {
         inner = `<h3>${esc(sh.title)}</h3><input class="inp" id="sheetText" value="${esc(sh.val)}" data-in="sheetText"><button class="btn primary block mt12" data-a="textOk">${t("save")}</button>`;
     }
-    return `<div class="scrim" data-a="scrim"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${inner}</div></div>`;
+    return `<div class="scrim ${still ? "still" : ""}" data-a="scrim"><div class="sheet ${still ? "still" : ""}" role="dialog" aria-modal="true"><div class="grab"></div>${inner}</div></div>`;
 }
 function numSheet(title, val, opts, onOk) {
     A.sheet = { kind: "num", title, val: val == null ? "" : fmt(val), fresh: true, ...opts, onOk };
@@ -1766,6 +1913,24 @@ app.addEventListener("click", async (ev) => {
                 break;
             case "accent":
                 A.settings.accent = v;
+                await saveSettings();
+                break;
+            case "restVibrate":
+                A.settings.restVibrate = !(A.settings.restVibrate !== false);
+                await saveSettings();
+                if (A.settings.restVibrate)
+                    buzz();
+                break;
+            case "restSound":
+                A.settings.restSound = !A.settings.restSound;
+                await saveSettings();
+                if (A.settings.restSound) {
+                    armRestAudio();
+                    setTimeout(beep, 300);
+                }
+                break;
+            case "restLock":
+                await setRestLock(!A.settings.restLock);
                 await saveSettings();
                 break;
             case "cbSafe":
@@ -1898,7 +2063,10 @@ app.addEventListener("click", async (ev) => {
                 await saveSession(s);
                 break;
             case "check":
+                armRestAudio();
                 await toggleSet(s, +v);
+                if (!s.rest)
+                    stopRestAudio();
                 render();
                 centerStrip();
                 return;
@@ -2017,6 +2185,7 @@ app.addEventListener("click", async (ev) => {
             }
             case "restSkip":
                 s.rest = null;
+                stopRestAudio();
                 await saveSession(s);
                 break;
             case "askFinish":
@@ -3102,7 +3271,7 @@ setInterval(() => {
         return;
     if (s.rest && !s.rest.buzzed && s.rest.endsAt <= now()) {
         s.rest.buzzed = true;
-        haptic();
+        restAlert(s);
         saveSession(s);
     }
     if (A.sheet || drag)

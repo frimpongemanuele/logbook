@@ -273,3 +273,8 @@ html[data-cb="1"][data-theme="light"]{--done:#0072b2;--done-soft:rgba(0,114,178,
 .carry{opacity:.6}
 .notebtn{display:inline-flex;align-items:center;gap:6px;margin:2px 0 10px;padding:8px 12px;border-radius:99px;background:var(--surface2);color:var(--muted);font-size:14px;font-weight:600;min-height:36px}
 .dotmark{width:8px;height:8px;border-radius:99px;background:var(--accent);display:inline-block}
+
+/* keypad: no bounce — the sheet slides in once, and the value display has a fixed height */
+.sheet.still{animation:none}
+.bigval{height:58px;line-height:58px;white-space:nowrap;overflow:hidden;margin:6px 0 10px}
+.toggle input{flex:none}
