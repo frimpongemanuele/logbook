@@ -113,7 +113,10 @@ try {
   for (const q of ["jump rope", "treadmill"]) {
     await page.click('[data-a="addToWorkout"]'); await page.fill(".search", q); await page.click('[data-a="picked"]'); await page.waitForSelector(".ex-name");
   }
-  ok("Treadmill row shows minutes, no kg/RIR", (await page.$$eval(".set", els => els[0].querySelectorAll(".cell").length)) === 1 && (await page.textContent(".sets-head")).includes("Minutes"));
+  ok("Treadmill row shows minutes, speed and incline — no kg/RIR", (await page.$$eval(".set", els => els[0].querySelectorAll(".cell").length)) === 3 && (await page.textContent(".sets-head")).includes("km/h"));
+  await page.click('#strip button:has-text("Jump Rope")'); await page.waitForTimeout(100);
+  ok("Jump rope (reps) still has one cell", (await page.$$eval(".set", els => els[0].querySelectorAll(".cell").length)) === 1 && (await page.textContent(".sets-head")).includes("Reps"));
+  await page.click('#strip button:has-text("Treadmill")'); await page.waitForTimeout(100);
   await page.locator(".set").nth(0).locator('[data-f="mins"]').click(); await page.click('[data-a="kKey"][data-v="2"]'); await page.click('[data-a="kKey"][data-v="0"]'); await page.click('[data-a="kOk"]');
   await page.locator(".set").nth(0).locator('[data-a="check"]').click(); await page.waitForTimeout(150);
   await shot("06b-cardio-time");

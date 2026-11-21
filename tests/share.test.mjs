@@ -53,3 +53,11 @@ test("a friend's built-in exercise that I deleted is matched back by name", asyn
   assert.equal(created.filter(c => c.name.en === "Bench Press").length, 1, "recreated as custom, not merged into a different exercise");
   assert.equal(program.days[0].exercises.length, 3);
 });
+
+test("treadmill speed and incline survive sharing and CSV", async () => {
+  const tm = lib.get("ex_treadmill"); assert.deepEqual(tm.extras, ["speed", "incline"]);
+  const p = emptyProgram(1); p.days[0].exercises = [{ id: "pe9", exId: "ex_treadmill", rest: 0, sets: [{ type: "working", load: null, repsMin: 0, repsMax: 0, rir: null, mins: 20, speed: 6.5, incline: 2 }] }];
+  const o = await unpack(await pack(toPayload(p, lib, false)));
+  const { program } = fromPayload(o, lib, 5, M);
+  assert.deepEqual([program.days[0].exercises[0].sets[0].mins, program.days[0].exercises[0].sets[0].speed, program.days[0].exercises[0].sets[0].incline], [20, 6.5, 2]);
+});

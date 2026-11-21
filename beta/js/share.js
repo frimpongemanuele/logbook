@@ -38,11 +38,11 @@ export function toPayload(p, lib, withLoads) {
         e: d.exercises.map((pe) => {
             const ex = lib.get(pe.exId);
             if (ex && (ex.custom || !pe.exId.startsWith("ex_") || pe.exId.startsWith("ex_c_"))) {
-                cx[pe.exId] = { n: ex.name, eq: ex.equipment, lt: ex.loadType, inc: ex.inc, r: ex.rest, m: ex.muscles, tr: ex.track || "wr", la: ex.laterality || "bilateral" };
+                cx[pe.exId] = { n: ex.name, eq: ex.equipment, lt: ex.loadType, inc: ex.inc, r: ex.rest, m: ex.muscles, tr: ex.track || "wr", la: ex.laterality || "bilateral", xt: ex.extras || [] };
             }
             return {
                 x: pe.exId, xn: ex ? ex.name.en : "", g: pe.group || null, o: pe.optional ? 1 : 0, r: pe.rest ?? null, sc: pe.scheme || "straight", nt: pe.notes || "",
-                s: pe.sets.map((s) => [Math.max(0, TYPES.indexOf(s.type)), withLoads ? (s.load ?? null) : null, s.repsMin, s.repsMax ?? null, s.rir ?? null, s.mins ?? null]),
+                s: pe.sets.map((s) => [Math.max(0, TYPES.indexOf(s.type)), withLoads ? (s.load ?? null) : null, s.repsMin, s.repsMax ?? null, s.rir ?? null, s.mins ?? null, s.speed ?? null, s.incline ?? null]),
             };
         }),
     }));
@@ -67,7 +67,7 @@ export function fromPayload(o, lib, now, match) {
         if (!id) {
             const n = def ? def.n : { en: xn || "Exercise", it: xn || "Esercizio" };
             const ex = { id: "ex_c_" + uid(), name: { en: n.en || n.it, it: n.it || n.en }, aliases: [], equipment: def?.eq || "machine", pattern: "other", mechanic: def?.tr === "time" ? "cardio" : "isolation",
-                loadType: def?.lt || "external", inc: def?.inc ?? 2.5, rest: def?.r ?? 90, muscles: def?.m || [], track: def?.tr || "wr", laterality: def?.la || "bilateral",
+                loadType: def?.lt || "external", inc: def?.inc ?? 2.5, rest: def?.r ?? 90, muscles: def?.m || [], track: def?.tr || "wr", laterality: def?.la || "bilateral", ...(def?.xt?.length ? { extras: def.xt } : {}),
                 notes: "", custom: true, archived: false, createdAt: now, updatedAt: now };
             created.push(ex);
             id = ex.id;
@@ -81,7 +81,7 @@ export function fromPayload(o, lib, now, match) {
             id: uid(), name: { en: d.n, it: d.n },
             exercises: d.e.map((e) => ({
                 id: uid(), exId: resolve(e.x, e.xn), group: e.g || null, optional: !!e.o, rest: e.r ?? null, scheme: e.sc || "straight", notes: e.nt || "",
-                sets: e.s.map((a) => ({ id: uid(), type: TYPES[a[0]] || "working", load: a[1] ?? null, repsMin: a[2] ?? 8, repsMax: a[3] === undefined ? 12 : a[3], rir: a[4] ?? null, ...(a[5] != null ? { mins: a[5] } : {}) })),
+                sets: e.s.map((a) => ({ id: uid(), type: TYPES[a[0]] || "working", load: a[1] ?? null, repsMin: a[2] ?? 8, repsMax: a[3] === undefined ? 12 : a[3], rir: a[4] ?? null, ...(a[5] != null ? { mins: a[5] } : {}), ...(a[6] != null ? { speed: a[6] } : {}), ...(a[7] != null ? { incline: a[7] } : {}) })),
             })),
         })),
     };

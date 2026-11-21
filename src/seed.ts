@@ -124,6 +124,7 @@ export function seedExercises(now: number) {
       ...r[10].split(",").filter(Boolean).map(m => ({ m, role: "primary" as const })),
       ...r[11].split(",").filter(Boolean).map(m => ({ m, role: "secondary" as const })),
     ],
+    ...(r[0] === "treadmill" ? { extras: ["speed", "incline"] } : {}),
     notes: "", custom: false, archived: false, createdAt: now, updatedAt: now,
   }));
 }

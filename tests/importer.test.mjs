@@ -161,3 +161,11 @@ test("unilateral / single-leg library entries match Italian names", () => {
   assert.equal(libMap.get("ex_sarow").laterality, "unilateral"); assert.equal(libMap.get("ex_sarow").custom, false);
   assert.equal(libMap.get("ex_bench").laterality, "bilateral");
 });
+
+test("CSV export keeps treadmill speed and incline", async () => {
+  const { setsCsv } = await import("../beta/js/data.js");
+  const lib = new Map(seedExercises(1).map(e => [e.id, e]));
+  const s = { id: "s1", status: "completed", startedAt: Date.UTC(2026, 10, 1, 9), dayName: { en: "Legs A" }, exercises: [{ exId: "ex_treadmill", name: lib.get("ex_treadmill").name, sets: [{ type: "working", load: 0, reps: 0, mins: 20, speed: 6.5, incline: 2, done: true, rir: null }] }] };
+  const r = parseAny(setsCsv([s], lib)); assert.equal(r.kind, "log");
+  const x = r.sessions[0].exercises[0].sets[0]; assert.deepEqual([x.mins, x.speed, x.incline], [20, 6.5, 2]);
+});

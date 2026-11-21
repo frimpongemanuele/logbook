@@ -38,12 +38,20 @@ const dstr = (ms, o = { weekday: "short", day: "numeric", month: "short" }) => n
 const tstr = (ms) => new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
 const sessionDate = (s) => (s.dateUnknown ? t("imported") : dstr(s.startedAt, { weekday: "short", day: "numeric", month: "short", year: "numeric" }));
 const loadTxt = (ex, load) => (ex && (ex.loadType === "bodyweight" || ex.loadType === "bw_plus") ? (load ? "+" + fmt(load) : t("bw")) : fmt(load));
+const numTitle = (f, ex) => f === "load" ? t("weight") : f === "mins" ? t("minutes") : f === "speed" || f === "incline" ? t("ex_" + f) : t("reps");
+const numOpts = (f, ex) => f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" }
+    : f === "speed" ? { step: 0.5, decimal: true, unit: "km/h" } : f === "incline" ? { step: 0.5, decimal: true, unit: "%" } : { step: 1 };
 const trackOf = (exId) => exById(exId)?.track || "wr";
+/** Extra per-set measures of a timed exercise: the treadmill has speed (km/h) and incline (%). */
+const EXTRA_UNIT = { speed: "km/h", incline: "%" };
+const extrasOf = (ex) => ((ex?.track === "time" && Array.isArray(ex.extras)) ? ex.extras : []);
+const extraTxt = (ex, x) => extrasOf(ex).filter(k => x?.[k] != null).map(k => `${fmt(x[k])}${k === "incline" ? "" : " "}${EXTRA_UNIT[k]}`).join(" · ");
+const timeTxt = (ex, x) => [`${fmt(x.mins)} min`, extraTxt(ex, x)].filter(Boolean).join(" · ");
 /** One set as text, by the exercise's tracking type: 80×8@2 · ×100 · 12 min */
 function setTxt(ex, x, withRir = false) {
     const tr = ex?.track || "wr";
     if (tr === "time")
-        return `${fmt(x.mins)} min`;
+        return timeTxt(ex, x);
     if (tr === "reps")
         return `×${x.reps}`;
     return `${loadTxt(ex, x.load)}×${x.reps}${withRir && x.rir != null ? "@" + x.rir : ""}`;
@@ -111,6 +119,10 @@ async function boot() {
             }
             if (!cur.custom && cur.laterality !== sd.laterality) {
                 cur.laterality = sd.laterality;
+                ch = true;
+            }
+            if (sd.extras && !cur.extras) {
+                cur.extras = sd.extras;
                 ch = true;
             }
             if (ch)
@@ -274,10 +286,14 @@ function buildSets(tpls, exId) {
         const reps = prev && prev.load === load ? Math.max(prev.reps, tp.repsMin) : tp.repsMin;
         const tr = trackOf(exId);
         const mins = tr === "time" ? (tp.mins ?? prev?.mins ?? 10) : null;
+        const xs = {};
+        if (tr === "time")
+            for (const k of extrasOf(exById(exId)))
+                xs[k] = tp[k] ?? prev?.[k] ?? null;
         return {
-            id: uid(), type: tp.type, load: tr === "wr" ? load : 0, reps: tr === "time" ? 0 : reps, mins, rir: warm || tr !== "wr" ? null : tp.rir, rpe: null, done: false, doneAt: null, edited: {},
-            last: prev ? { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null, ...(carry ? { carry: true } : {}) } : null,
-            t: { repsMin: tp.repsMin, repsMax: tp.repsMax, rir: tr === "wr" ? tp.rir : null, load: tp.load, mins: tp.mins ?? null },
+            id: uid(), type: tp.type, load: tr === "wr" ? load : 0, reps: tr === "time" ? 0 : reps, mins, ...xs, rir: warm || tr !== "wr" ? null : tp.rir, rpe: null, done: false, doneAt: null, edited: {},
+            last: prev ? { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null, speed: prev.speed ?? null, incline: prev.incline ?? null, ...(carry ? { carry: true } : {}) } : null,
+            t: { repsMin: tp.repsMin, repsMax: tp.repsMax, rir: tr === "wr" ? tp.rir : null, load: tp.load, mins: tp.mins ?? null, speed: tp.speed ?? null, incline: tp.incline ?? null },
         };
     });
 }
@@ -321,7 +337,7 @@ function fillMissingLast(s) {
             const prev = pool[pool.length - 1];
             if (!prev)
                 return;
-            x.last = { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null, carry: true };
+            x.last = { load: prev.load, reps: prev.reps, rir: prev.rir, mins: prev.mins ?? null, speed: prev.speed ?? null, incline: prev.incline ?? null, carry: true };
             ch = true;
         });
     }
@@ -364,7 +380,26 @@ async function syncOrderToPlan(s) {
 }
 function templatesFromSets(e, old) {
     return e.sets.map((x, i) => old[i] ? { ...old[i], type: x.type } : {
-        id: uid(), type: x.type, load: null, repsMin: x.t?.repsMin ?? x.reps ?? 8, repsMax: x.t?.repsMax ?? x.reps ?? 12, rir: x.t?.rir ?? null, ...(x.mins != null ? { mins: x.mins } : {})
+        id: uid(), type: x.type, load: null, repsMin: x.t?.repsMin ?? x.reps ?? 8, repsMax: x.t?.repsMax ?? x.reps ?? 12, rir: x.t?.rir ?? null, ...(x.mins != null ? { mins: x.mins } : {}), ...(x.speed != null ? { speed: x.speed } : {}), ...(x.incline != null ? { incline: x.incline } : {})
+    });
+}
+/** Take an exercise out of the running workout only; the plan is left alone. Undo puts it back. */
+function removeFromWorkout(s, e) {
+    const logged = e.sets.filter((x) => x.done).length;
+    confirmSheet(t("rwTitle"), logged ? t("rwBodyLogged", { x: nm(e.name), n: logged }) : t("rwBody", { x: nm(e.name) }), t("delete"), true, async () => {
+        const idx = s.exercises.indexOf(e);
+        if (idx < 0)
+            return;
+        s.exercises.splice(idx, 1);
+        const lone = e.group ? s.exercises.filter((x) => x.group === e.group) : [];
+        const loneOld = lone.length === 1 ? lone[0].group : null;
+        if (lone.length === 1)
+            lone[0].group = null; // a superset of one is no superset (this workout only)
+        const oldIdx = s.idx;
+        s.idx = Math.max(0, Math.min(idx, s.exercises.length - 1));
+        await saveSession(s);
+        toast(t("rwDone"), async () => { s.exercises.splice(idx, 0, e); if (loneOld)
+            lone[0].group = loneOld; s.idx = oldIdx; await saveSession(s); render(); });
     });
 }
 function planMenu(s) {
@@ -411,7 +446,7 @@ function planMenu(s) {
                 toast(t("pmDone"));
             }) });
     }
-    if (!e.sets.some((x) => x.done))
+    if (r && !e.sets.some((x) => x.done))
         items.push({ label: t("pmRemoveBoth"), danger: true, on: () => confirmSheet(t("pmRemoveBoth"), t("pmRemoveBothQ", { x: nm(e.name) }), t("delete"), true, async () => {
                 if (r) {
                     r.d.exercises.splice(r.d.exercises.indexOf(r.pe), 1);
@@ -567,7 +602,7 @@ function vToday() {
         const lp = lastPerf(pe.exId);
         const ex = exById(pe.exId);
         // no ticked sets in History yet → show the plan instead of a dash
-        const plan = pe.sets.filter(isWork).map((tp) => (ex?.track || "wr") === "time" ? `${fmt(tp.mins ?? 0)} min`
+        const plan = pe.sets.filter(isWork).map((tp) => (ex?.track || "wr") === "time" ? timeTxt(ex, { ...tp, mins: tp.mins ?? 0 })
             : `${tp.load != null && (ex?.track || "wr") === "wr" ? loadTxt(ex, tp.load) + "×" : "×"}${fmtRange(tp.repsMin, tp.repsMax)}`).join(" · ");
         const txt = lp ? lp.work.map((y) => setTxt(ex, y)).join(" · ") : plan ? `<span class="faint">${t("planLbl")}: ${plan}</span>` : "—";
         return `<div class="li"><span>${esc(exName(pe.exId))}${pe.optional ? ` <span class="faint">(${t("optional")})</span>` : ""}${pe.group ? ` <span class="pill">${esc(pe.group)}</span>` : ""}</span><span class="muted num small r">${txt}</span></div>`;
@@ -621,15 +656,18 @@ function vWorkout(s) {
     const sets = e.sets.map((x, i) => {
         const g = (f) => (!x.done && !x.edited?.[f] ? "ghost" : "");
         const tr = ex?.track || "wr";
-        const last = x.last ? (x.last.carry ? '<span class="carry" title="' + esc(t("lastCarry")) + '">' : "<span>") + (tr === "wr" ? `<b>${loadTxt(ex, x.last.load)}×${x.last.reps}</b>${x.last.rir != null ? " @" + x.last.rir : ""}` : `<b>${setTxt(ex, x.last)}</b>`) + "</span>" : "—";
-        const cells = tr === "time"
-            ? `<button class="cell num span3 ${g("mins")}" data-a="wNum" data-f="mins" data-v="${i}" aria-label="${t("minutes")}">${fmt(x.mins)} <span class="unit">min</span></button>`
-            : tr === "reps"
-                ? `<button class="cell num span3 ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps} <span class="unit">${t("reps").toLowerCase()}</span></button>`
-                : `<button class="cell num ${g("load")}" data-a="wNum" data-f="load" data-v="${i}" aria-label="${t("weight")}">${loadTxt(ex, x.load)}</button>
+        const last = x.last ? (x.last.carry ? '<span class="carry" title="' + esc(t("lastCarry")) + '">' : "<span>") + (tr === "wr" ? `<b>${loadTxt(ex, x.last.load)}×${x.last.reps}</b>${x.last.rir != null ? " @" + x.last.rir : ""}` : tr === "time" && extrasOf(ex).length ? `<b>${fmt(x.last.mins)} min</b><br><small>${esc(extraTxt(ex, x.last))}</small>` : `<b>${setTxt(ex, x.last)}</b>`) + "</span>" : "—";
+        const xt = extrasOf(ex);
+        const cells = tr === "time" && xt.length
+            ? `<button class="cell num ${g("mins")}" data-a="wNum" data-f="mins" data-v="${i}" aria-label="${t("minutes")}">${fmt(x.mins)}</button>` + xt.map(k => `<button class="cell num ${g(k)}" data-a="wNum" data-f="${k}" data-v="${i}" aria-label="${t("ex_" + k)}">${x[k] == null ? "–" : fmt(x[k])}</button>`).join("") + (xt.length < 2 ? "<span></span>" : "")
+            : tr === "time"
+                ? `<button class="cell num span3 ${g("mins")}" data-a="wNum" data-f="mins" data-v="${i}" aria-label="${t("minutes")}">${fmt(x.mins)} <span class="unit">min</span></button>`
+                : tr === "reps"
+                    ? `<button class="cell num span3 ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps} <span class="unit">${t("reps").toLowerCase()}</span></button>`
+                    : `<button class="cell num ${g("load")}" data-a="wNum" data-f="load" data-v="${i}" aria-label="${t("weight")}">${loadTxt(ex, x.load)}</button>
       <button class="cell num ${g("reps")}" data-a="wNum" data-f="reps" data-v="${i}" aria-label="${t("reps")}">${x.reps}</button>
       <button class="cell num ${g("rir")}" data-a="wRir" data-v="${i}" aria-label="RIR">${x.rir == null ? "–" : x.rir}</button>`;
-        const tgt = !isWork(x) || !x.t ? "" : tr === "time" ? (x.t.mins != null ? `${fmt(x.t.mins)} min` : "")
+        const tgt = !isWork(x) || !x.t ? "" : tr === "time" ? (x.t.mins != null ? timeTxt(ex, x.t) : "")
             : `${fmtRange(x.t.repsMin, x.t.repsMax)}${tr === "wr" && x.t.rir != null ? " @ RIR " + x.t.rir : ""}`;
         return `<div class="set ${x.done ? "done" : ""}">
       <button data-a="setMenu" data-v="${i}" aria-label="${t("set")} ${i + 1}">${badge(e, i)}</button>
@@ -647,7 +685,7 @@ function vWorkout(s) {
     ${e.exId !== e.plannedExId ? `<div class="note">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
     ${e.notes ? `<div class="note">${esc(e.notes)}</div>` : ""}
     <button class="notebtn" data-a="wNotes">✎ ${s.notes || e.notes ? t("wnEdit") : t("wnAdd")}${s.notes ? ` <i class="dotmark" aria-hidden="true"></i>` : ""}</button>
-    <div class="sets-head"><span>${t("set")}</span><span>${t("last")}</span>${(ex?.track || "wr") === "wr" ? `<span class="c">${t("kg")}</span><span class="c">${t("reps")}</span><span class="c">${t("rir")}</span>` : `<span class="c span3">${(ex?.track) === "time" ? t("minutes") : t("reps")}</span>`}<span></span></div>
+    <div class="sets-head"><span>${t("set")}</span><span>${t("last")}</span>${(ex?.track || "wr") === "wr" ? `<span class="c">${t("kg")}</span><span class="c">${t("reps")}</span><span class="c">${t("rir")}</span>` : (ex?.track) === "time" && extrasOf(ex).length ? `<span class="c">${t("min")}</span>${extrasOf(ex).map(k => `<span class="c">${t("ex_" + k + "_h")}</span>`).join("")}${extrasOf(ex).length < 2 ? "<span></span>" : ""}` : `<span class="c span3">${(ex?.track) === "time" ? t("minutes") : t("reps")}</span>`}<span></span></div>
     ${sets}
     <div class="row mt4"><button class="addset flex1" data-a="wAddSet">+ ${t("addSet")}</button><button class="addset" style="flex:0 0 auto;padding:0 14px" data-a="wAddWarm">+ W</button></div>
   </div>`;
@@ -865,7 +903,7 @@ function vSession(p) {
       ${e.exId !== e.plannedExId ? `<div class="faint small">↺ ${t("replaces", { x: esc(exName(e.plannedExId)) })}</div>` : ""}
       ${e.sets.map((x, si) => `<div class="hset ${x.done ? "" : "undone"}">
         <span class="faint num">${x.type === "warmup" ? "W" : e.sets.slice(0, si + 1).filter(isWork).length}</span>
-        ${(ex?.track || "wr") === "time" ? `<button class="cell sm num span3" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="mins">${fmt(x.mins)} min</button>`
+        ${(ex?.track || "wr") === "time" ? (extrasOf(ex).length ? `<button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="mins">${fmt(x.mins)}′</button>${extrasOf(ex).map(k => `<button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="${k}">${x[k] == null ? "–" : fmt(x[k]) + (k === "incline" ? "%" : "")}</button>`).join("")}${extrasOf(ex).length < 2 ? "<span></span>" : ""}` : `<button class="cell sm num span3" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="mins">${fmt(x.mins)} min</button>`)
             : (ex?.track || "wr") === "reps" ? `<button class="cell sm num span3" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="reps">× ${x.reps}</button>`
                 : `<button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="load">${loadTxt(ex, x.load)} kg</button>
         <button class="cell sm num" data-a="hNum" data-id="${s.id}" data-e="${ei}" data-v="${si}" data-f="reps">× ${x.reps}</button>
@@ -916,7 +954,7 @@ function vDay(p) {
     <div class="sortable" data-sort="day" data-id="${pr.id}" data-d="${p.d}">${d.exercises.map((pe, i) => {
         const ex = exById(pe.exId);
         const tr = ex?.track || "wr";
-        const sum = pe.sets.map((s) => tr === "time" ? `${fmt(s.mins ?? 0)} min` : tr === "reps" ? `×${fmtRange(s.repsMin, s.repsMax)}`
+        const sum = pe.sets.map((s) => tr === "time" ? timeTxt(ex, { ...s, mins: s.mins ?? 0 }) : tr === "reps" ? `×${fmtRange(s.repsMin, s.repsMax)}`
             : s.type === "warmup" ? `W ${loadTxt(ex, s.load ?? 0)}×${s.repsMin}` : `${s.load != null ? loadTxt(ex, s.load) + "×" : ""}${fmtRange(s.repsMin, s.repsMax)}${s.rir != null ? "@" + s.rir : ""}`).join(" · ");
         return `<div class="card row sort-item"><button class="flex1 tl" data-a="openPe" data-id="${pr.id}" data-d="${p.d}" data-v="${i}">
         <b>${esc(exName(pe.exId))}</b>${pe.group ? ` <span class="pill accent">${esc(pe.group)}</span>` : ""}${pe.scheme && pe.scheme !== "straight" ? ` <span class="pill">${t("sch_" + pe.scheme + "_s")}</span>` : ""}${pe.optional ? ` <span class="pill">${t("optional")}</span>` : ""}
@@ -940,7 +978,7 @@ function vPe(p) {
             : `<div class="tpl-head"><span></span><span class="span4">${t("minutes")}</span><span></span></div>`}
     ${pe.sets.map((s, i) => `<div class="tpl">
       <button data-a="tplType" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}" class="badge ${s.type === "warmup" ? "w" : s.type === "top" ? "acc" : ""}">${s.type === "warmup" ? "W" : s.type === "top" ? "T" : s.type === "backoff" ? "B" : s.type === "amrap" ? "A" : s.type === "drop" ? "D" : pe.sets.slice(0, i + 1).filter(isWork).length}</button>
-      ${(ex?.track || "wr") === "time" ? `<button class="cell sm num span4" data-a="tplNum" data-f="mins" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${fmt(s.mins ?? 0)} min</button>`
+      ${(ex?.track || "wr") === "time" ? (extrasOf(ex).length ? `<button class="cell sm num" data-a="tplNum" data-f="mins" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${fmt(s.mins ?? 0)}′</button>${extrasOf(ex).map(k => `<button class="cell sm num" data-a="tplNum" data-f="${k}" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s[k] == null ? "–" : fmt(s[k]) + (k === "incline" ? "%" : "")}</button>`).join("")}${extrasOf(ex).length < 2 ? "<span></span>" : ""}` : `<button class="cell sm num span4" data-a="tplNum" data-f="mins" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${fmt(s.mins ?? 0)} min</button>`)
         : ex.track === "reps" ? `<button class="cell sm num span2" data-a="tplNum" data-f="repsMin" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMin}</button>
       <button class="cell sm num span2" data-a="tplNum" data-f="repsMax" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.repsMax == null ? "∞" : s.repsMax}</button>`
             : `<button class="cell sm num" data-a="tplNum" data-f="load" data-id="${pr.id}" data-d="${p.d}" data-e="${p.e}" data-v="${i}">${s.load == null ? "–" : loadTxt(ex, s.load)}</button>
@@ -1089,6 +1127,7 @@ function vExForm(p) {
     <label class="lbl" for="fit">${t("name")} (Italiano)</label><input id="fit" class="inp" value="${esc(f.name.it)}" data-in="fName" data-v="it">
     <label class="lbl" for="feq">${t("equipment")}</label><select id="feq" class="inp" data-in="fEq">${eqs.map(e => `<option value="${e}" ${f.equipment === e ? "selected" : ""}>${t("eq_" + e)}</option>`).join("")}</select>
     <label class="lbl" for="ftr">${t("tracking")}</label><select id="ftr" class="inp" data-in="fTr">${["wr", "reps", "time"].map(e => `<option value="${e}" ${(f.track || "wr") === e ? "selected" : ""}>${t("tr_" + e)}</option>`).join("")}</select>
+    ${(f.track || "wr") === "time" ? `<div class="lbl">${t("extrasT")}</div><label class="toggle"><input type="checkbox" ${(f.extras || []).includes("speed") ? "checked" : ""} data-in="fXSpeed"> ${t("ex_speed")} (km/h)</label><label class="toggle"><input type="checkbox" ${(f.extras || []).includes("incline") ? "checked" : ""} data-in="fXIncline"> ${t("ex_incline")} (%)</label>` : ""}
     <label class="lbl" for="flt">${t("loadType")}</label><select id="flt" class="inp" data-in="fLt">${lts.map(e => `<option value="${e}" ${f.loadType === e ? "selected" : ""}>${t("lt_" + e)}</option>`).join("")}</select>
     <label class="lbl" for="fpm">${t("primary")}</label><select id="fpm" class="inp" data-in="fPrim">${MUSCLES.map(m => `<option value="${m}" ${prim === m ? "selected" : ""}>${t("m_" + m)}</option>`).join("")}</select>
     <div class="lbl">${t("secondary")}</div><div class="chips-row wrap">${MUSCLES.filter(m => m !== prim).map(m => `<button class="chipf ${sec.has(m) ? "on" : ""}" data-a="fSec" data-v="${m}">${t("m_" + m)}</button>`).join("")}</div>
@@ -1865,7 +1904,7 @@ app.addEventListener("click", async (ev) => {
                 return;
             case "wNum": {
                 const e = s.exercises[s.idx], x = e.sets[+v], f = d.f, ex = exById(e.exId);
-                numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async (n) => {
+                numSheet(numTitle(f, ex), x[f], numOpts(f, ex), async (n) => {
                     const old = x[f];
                     x[f] = n;
                     x.edited = { ...(x.edited || {}), [f]: true };
@@ -1873,6 +1912,10 @@ app.addEventListener("click", async (ev) => {
                         for (const y of e.sets.slice(+v + 1))
                             if (!y.done && !y.edited?.load && y.type !== "warmup" && y.load === old)
                                 y.load = n;
+                    if (f === "speed" || f === "incline")
+                        for (const y of e.sets.slice(+v + 1))
+                            if (!y.done && !y.edited?.[f] && (y[f] ?? null) === (old ?? null))
+                                y[f] = n;
                     await saveSession(s);
                 });
                 return;
@@ -1898,7 +1941,7 @@ app.addEventListener("click", async (ev) => {
                 const e = s.exercises[s.idx];
                 const warm = a === "wAddWarm";
                 const src = warm ? e.sets.find((x) => x.type === "warmup") : [...e.sets].reverse().find((x) => isWork(x));
-                const ns = { id: uid(), type: warm ? "warmup" : "working", load: src?.load ?? 0, reps: src?.reps ?? 8, mins: src?.mins ?? (trackOf(e.exId) === "time" ? 10 : null), rir: warm || trackOf(e.exId) !== "wr" ? null : (src?.rir ?? 2), rpe: null, done: false, doneAt: null, edited: {}, last: null,
+                const ns = { id: uid(), type: warm ? "warmup" : "working", load: src?.load ?? 0, reps: src?.reps ?? 8, mins: src?.mins ?? (trackOf(e.exId) === "time" ? 10 : null), ...(src?.speed != null ? { speed: src.speed } : extrasOf(exById(e.exId)).includes("speed") ? { speed: null } : {}), ...(src?.incline != null ? { incline: src.incline } : extrasOf(exById(e.exId)).includes("incline") ? { incline: null } : {}), rir: warm || trackOf(e.exId) !== "wr" ? null : (src?.rir ?? 2), rpe: null, done: false, doneAt: null, edited: {}, last: null,
                     t: src?.t ? { ...src.t } : { repsMin: 8, repsMax: 12, rir: warm ? null : 2, load: null } };
                 if (warm)
                     e.sets.unshift(ns);
@@ -1917,6 +1960,7 @@ app.addEventListener("click", async (ev) => {
                     ...(s.idx > 0 ? [{ label: t("moveUp"), on: async () => { const x = s.exercises.splice(s.idx, 1)[0]; s.exercises.splice(--s.idx, 0, x); await saveSession(s); await syncOrderToPlan(s); } }] : []),
                     ...(s.idx < s.exercises.length - 1 ? [{ label: t("moveDown"), on: async () => { const x = s.exercises.splice(s.idx, 1)[0]; s.exercises.splice(++s.idx, 0, x); await saveSession(s); await syncOrderToPlan(s); } }] : []),
                     { label: t("pmTitle") + "…", on: () => planMenu(s) },
+                    { label: t("rwTitle"), danger: true, on: () => removeFromWorkout(s, e) },
                 ]);
                 return;
             }
@@ -2014,7 +2058,7 @@ app.addEventListener("click", async (ev) => {
                 return;
             case "hNum": {
                 const ss = A.sessions.find((x) => x.id === d.id), e = ss.exercises[+d.e], x = e.sets[+v], f = d.f, ex = exById(e.exId);
-                numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : t("reps"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async (n) => { x[f] = n; await saveSession(ss); });
+                numSheet(numTitle(f, ex), x[f], numOpts(f, ex), async (n) => { x[f] = n; await saveSession(ss); });
                 return;
             }
             case "hRir": {
@@ -2148,7 +2192,7 @@ app.addEventListener("click", async (ev) => {
             }
             case "tplNum": {
                 const p = findProg(d.id), pe = p.days[+d.d].exercises[+d.e], x = pe.sets[+v], f = d.f, ex = exById(pe.exId);
-                numSheet(f === "load" ? t("weight") : f === "mins" ? t("minutes") : f === "repsMin" ? t("repsMin") : t("repsMaxHint"), x[f], f === "load" ? { step: ex?.inc || 2.5, decimal: true, unit: "kg" } : f === "mins" ? { step: 1, decimal: true, unit: "min" } : { step: 1 }, async (n) => {
+                numSheet(f === "repsMin" ? t("repsMin") : f === "repsMax" ? t("repsMaxHint") : numTitle(f, ex), x[f], numOpts(f, ex), async (n) => {
                     if (f === "repsMax" && n === 0)
                         x.repsMax = null; // no upper limit (AMRAP 8+)
                     else {
@@ -2787,6 +2831,14 @@ app.addEventListener("change", async (ev) => {
     }
     if (k === "fTr") {
         A.form.track = el.value;
+        render();
+        return;
+    }
+    if (k === "fXSpeed" || k === "fXIncline") {
+        const key = k === "fXSpeed" ? "speed" : "incline";
+        const set = new Set(A.form.extras || []);
+        el.checked ? set.add(key) : set.delete(key);
+        A.form.extras = ["speed", "incline"].filter(q => set.has(q));
         return;
     }
     if (k === "histEx") {

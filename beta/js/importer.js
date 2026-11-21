@@ -229,7 +229,7 @@ const COLS = {
     exercise: /^(esercizio|esercizi|exercise|exercises|nome|name|movimento)$/, muscle: /^(muscolo|muscoli|muscle|muscles|gruppo|group)$/,
     sets: /^(set|sets|serie|n serie)$/, reps: /^(ripetizioni|ripetizione|rip|reps|rep|repetitions)$/, rest: /^(recupero|rest|pausa|riposo)$/,
     load: /^(carico|peso|kg|weight|load|load kg|load_kg)$/, rir: /^(rir)$/, notes: /^(note|notes|nota)$/, day: /^(giorno|day|seduta|session|workout|scheda)$/,
-    date: /^(data|date)$/, set: /^(n|set n|set #|set_no|#)$/, minutes: /^(minuti|minutes|min|durata|duration)$/,
+    date: /^(data|date)$/, set: /^(n|set n|set #|set_no|#)$/, minutes: /^(minuti|minutes|min|durata|duration)$/, speed: /^(speed|speed kmh|speed_kmh|velocita|velocita kmh|km h|kmh)$/, incline: /^(incline|incline pct|incline_pct|inclinazione|pendenza)$/,
 };
 function headerMap(row) {
     const map = {};
@@ -378,7 +378,7 @@ export function parseLogRows(rows) {
         }
         const num = (i) => (i == null || r[i] == null || r[i] === "" ? null : parseFloat(String(r[i]).replace(",", ".")));
         const typeCol = rows[hi].findIndex(c => norm(c) === "type");
-        e.sets.push({ type: typeCol >= 0 && /warm/i.test(r[typeCol]) ? "warmup" : "working", load: num(h.load) ?? 0, reps: num(h.reps) ?? 0, rir: num(h.rir), mins: num(h.minutes) });
+        e.sets.push({ type: typeCol >= 0 && /warm/i.test(r[typeCol]) ? "warmup" : "working", load: num(h.load) ?? 0, reps: num(h.reps) ?? 0, rir: num(h.rir), mins: num(h.minutes), speed: num(h.speed), incline: num(h.incline) });
     }
     return [...out.values()];
 }
@@ -560,7 +560,7 @@ export function buildSessionsFromLog(sessions, now, lib) {
                 const ex = lib.get(exId) || byName.get(norm(e.name));
                 return {
                     id: uid(), peId: null, exId, plannedExId: exId, name: ex ? ex.name : { en: e.name, it: e.name }, group: e.group, optional: e.optional, skipped: false, notes: "",
-                    sets: e.sets.map(x => ({ id: uid(), type: x.type, load: x.load, reps: x.reps, mins: x.mins, rir: x.rir, rpe: null, done: true, doneAt: started, t: null })),
+                    sets: e.sets.map(x => ({ id: uid(), type: x.type, load: x.load, reps: x.reps, mins: x.mins, ...(x.speed != null ? { speed: x.speed } : {}), ...(x.incline != null ? { incline: x.incline } : {}), rir: x.rir, rpe: null, done: true, doneAt: started, t: null })),
                 };
             }),
         };

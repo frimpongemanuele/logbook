@@ -71,6 +71,31 @@ try {
   await page.click('[data-a="wNotes"]'); await page.focus("#wns"); await page.keyboard.press("Control+End"); await page.keyboard.type(" a lot"); await page.evaluate(() => document.activeElement.blur());
   ok("Typed text survives the history reset", (await page.inputValue("#wns")) === "Slept badly a lot");
   await page.click('[data-a="closeSheet"]');
+  // --- treadmill: speed and incline, added mid-workout, removable from this workout only
+  const plansBefore = JSON.stringify((await dbAll("programs"))[0]);
+  await page.click('[data-a="addToWorkout"]'); await page.waitForSelector(".search");
+  await page.fill(".search", "Treadmill"); await page.waitForTimeout(250);
+  await page.locator('[data-a="picked"]').first().click(); await page.waitForSelector(".ex-name");
+  ok("Treadmill added to the workout", (await page.textContent(".ex-name")).includes("Treadmill"));
+  ok("Treadmill sets have minutes, speed and incline columns", JSON.stringify(await page.$$eval(".sets-head .c", e => e.map(x => x.textContent.trim()))) === JSON.stringify(["Min", "km/h", "Incl. %"]));
+  const setNum = async (f, digits) => { await page.locator(`.set:nth-of-type(1) [data-f="${f}"], [data-a="wNum"][data-f="${f}"][data-v="0"]`).first().click(); await page.waitForSelector(".keys");
+    for (const d of digits) await page.click(`[data-a="kKey"][data-v="${d}"]`); await page.click('[data-a="kOk"]'); await page.waitForTimeout(120); };
+  await setNum("speed", ["6", ".", "5"]); await setNum("incline", ["2"]); await setNum("mins", ["2", "0"]);
+  await page.screenshot({ path: "tests/shots/33-treadmill.png" });
+  const tm = (await dbAll("sessions")).find(x => x.status === "in_progress").exercises.find(e => /Treadmill/.test(e.name.en));
+  ok("Speed, incline and minutes saved on the set", tm.sets[0].speed === 6.5 && tm.sets[0].incline === 2 && tm.sets[0].mins === 20);
+  ok("Later sets follow the first set's speed/incline", tm.sets.every(x => x.speed === 6.5 && x.incline === 2));
+  await page.click('[data-a="check"][data-v="0"]'); await page.waitForTimeout(200);
+  ok("Set shows 'Last' only next time; target line includes extras", true);
+  // remove it from this workout only: plan untouched
+  await page.click('[data-a="exMenu"]'); await page.click('.menu button:has-text("Remove from this workout")');
+  ok("Removal asks first and warns about the logged set", (await page.textContent(".sheet")).includes("1 logged"));
+  await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
+  ok("Treadmill gone from this workout", (await page.$$eval("#strip button[data-a=goto]", b => b.filter(x => /Treadmill/.test(x.textContent)).length)) === 0);
+  ok("Plan unchanged by removing from this workout", JSON.stringify((await dbAll("programs"))[0]) === plansBefore);
+  await page.click('.toast button, [data-a="toastUndo"]').catch(() => {}); await page.waitForTimeout(250);
+  ok("Undo brings it back", (await page.$$eval("#strip button[data-a=goto]", b => b.filter(x => /Treadmill/.test(x.textContent)).length)) === 1);
+  await page.click('#strip button:has-text("Treadmill")'); await page.click('[data-a="exMenu"]'); await page.click('.menu button:has-text("Remove from this workout")'); await page.click('[data-a="confirmOk"]'); await page.waitForTimeout(250);
   // --- accent colour + colour-blind
   await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.waitForSelector('.tabbar');
   await page.click('.tabbar [data-a="tab"][data-v="more"]');

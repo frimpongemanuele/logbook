@@ -121,6 +121,9 @@ const en: Record<string, string> = {
   pmRemoveBoth: "Remove from workout and plan", pmRemoveBothQ: "“{x}” is removed from this workout and from the plan.",
   wnAdd: "Add note", wnEdit: "Notes", wnTitle: "Notes", wnExercise: "About {x}", wnWorkout: "About the whole workout", wnExPh: "e.g. elbow pinched, change grip", wnWkPh: "e.g. slept badly, short on time",
   wnHint: "Saved as you type. Shown in History and when you finish.",
+  ex_speed: "Speed", ex_incline: "Incline", ex_speed_h: "km/h", ex_incline_h: "Incl. %", min: "Min", extrasT: "Also record per set",
+  rwTitle: "Remove from this workout", rwBody: "“{x}” is removed from today's workout only. Your plan stays as it is.",
+  rwBodyLogged: "“{x}” is removed from today's workout, including its {n} logged sets. Your plan stays as it is.", rwDone: "Removed from this workout",
 };
 
 const it: Record<string, string> = {
@@ -243,6 +246,9 @@ const it: Record<string, string> = {
   pmRemoveBoth: "Rimuovi da allenamento e scheda", pmRemoveBothQ: "“{x}” viene tolto da questo allenamento e dalla scheda.",
   wnAdd: "Aggiungi nota", wnEdit: "Note", wnTitle: "Note", wnExercise: "Su {x}", wnWorkout: "Sull'intero allenamento", wnExPh: "es. gomito fastidioso, cambia presa", wnWkPh: "es. dormito male, poco tempo",
   wnHint: "Salvate mentre scrivi. Le trovi nello Storico e a fine allenamento.",
+  ex_speed: "Velocità", ex_incline: "Inclinazione", ex_speed_h: "km/h", ex_incline_h: "Incl. %", min: "Min", extrasT: "Registra anche per serie",
+  rwTitle: "Rimuovi da questo allenamento", rwBody: "“{x}” viene tolto solo dall'allenamento di oggi. La scheda resta com'è.",
+  rwBodyLogged: "“{x}” viene tolto dall'allenamento di oggi, comprese le {n} serie registrate. La scheda resta com'è.", rwDone: "Rimosso da questo allenamento",
 };
 
 const DICT: Record<Lang, Record<string, string>> = { en, it };
