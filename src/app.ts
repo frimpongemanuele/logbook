@@ -1,9 +1,9 @@
-// Logbook app shell: state, screens, actions. Data is written to IndexedDB before the screen updates.
+// JimLogs app shell: state, screens, actions. Data is written to IndexedDB before the screen updates.
 import * as db from "./db.js";
 import { t, setLang, getLang, Lang } from "./i18n.js";
 import { seedExercises, MUSCLES } from "./seed.js";
 import { suggest, e1rm, volumeLoad, fmt, uid, clock, isWork, round2, fmtRange, OPEN_MARGIN } from "./domain.js";
-import { setsCsv, mergeImport } from "./data.js";
+import { setsCsv, fullText, mergeImport } from "./data.js";
 import { parseAny, readXlsx, matchAll, buildProgramFromPlan, buildSessionsFromLog, parseExerciseLine, readDelimited, dayName } from "./importer.js";
 
 import { CHANNEL, BUILD_VERSION } from "./channel.js";
@@ -73,67 +73,72 @@ function haptic() {
     l.appendChild(i); document.body.appendChild(l); l.click(); l.remove();
   } catch { /* best effort */ }
 }
-/* ---------------- rest-over alert: vibrate · beep · lock-screen notification (reaches the Apple Watch) ----------------
-   iPhone web apps cannot vibrate on demand, so this uses what iOS does allow: a haptic tap while the app is open, a beep,
-   and a notification. To keep the timer alive with the screen locked a silent sound plays during rests (this pauses music from other apps). */
-function wavUri(secs: number, fn: (t: number) => number, rate = 8000): string {
-  const n = Math.floor(secs * rate), buf = new Uint8Array(44 + n * 2), v = new DataView(buf.buffer);
-  const w = (o: number, str: string) => { for (let i = 0; i < str.length; i++) buf[o + i] = str.charCodeAt(i); };
-  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, n * 2, true);
-  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, fn(i / rate))) * 32767, true);
-  let bin = ""; for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
-  return "data:audio/wav;base64," + btoa(bin);
-}
-let SILENT_WAV = "", BEEP_WAV = "";
-const silentWav = () => SILENT_WAV || (SILENT_WAV = wavUri(1, () => 0));
-const beepWav = () => BEEP_WAV || (BEEP_WAV = wavUri(1.1, t => { const k = t % 0.36; return t < 1.08 && k < 0.2 ? Math.sin(2 * Math.PI * 880 * t) * 0.6 * Math.min(1, k * 60, (0.2 - k) * 60) : 0; }));
-let alertAudio: HTMLAudioElement | null = null;
-const wantsAudio = () => !!(A.settings.restSound || A.settings.restLock);
+/* ---------------- rest-over alert ----------------
+   In the app: a haptic buzz (Android/Chrome vibrate; iPhone allows it only during a tap) and an optional beep (Web Audio).
+   Locked phone / Apple Watch: iOS web apps stop running when the screen locks and cannot schedule notifications, so the app asks the free
+   ntfy service (ntfy.sh) to deliver one at the right moment; the ntfy iPhone app shows it like any native notification, which also buzzes the Watch.
+   No sound is played to keep the app alive, so music from other apps is never interrupted. */
+let actx: AudioContext | null = null;
 function audioSessionType(type: string) { try { const as = (navigator as Any).audioSession; if (as) as.type = type; } catch { } }
-/** Call inside a tap: unlocks audio, and (lock-screen mode) starts the silent loop that keeps the timer running while locked. */
+/** Call inside a tap: unlocks Web Audio for the beep (iOS only lets audio start from a user gesture). */
 function armRestAudio() {
-  if (!wantsAudio()) return;
+  if (!A.settings.restSound) return;
   try {
-    alertAudio = alertAudio || new Audio(); const a = alertAudio;
-    a.setAttribute("playsinline", ""); a.onended = null;
-    audioSessionType(A.settings.restLock ? "playback" : "ambient");
-    a.src = silentWav(); a.loop = !!A.settings.restLock; a.volume = 1;
-    const pr = a.play(); if (pr && pr.then) pr.then(() => { if (!A.settings.restLock) a.pause(); }).catch(() => { });
+    const AC = (window as Any).AudioContext || (window as Any).webkitAudioContext; if (!AC) return;
+    audioSessionType("ambient");                                   // mix with music, never interrupt it
+    actx = actx || new AC(); if (actx!.state !== "running") actx!.resume();
+    const b = actx!.createBuffer(1, 1, 22050), src = actx!.createBufferSource(); src.buffer = b; src.connect(actx!.destination); src.start(0);
   } catch { /* best effort */ }
 }
-function stopRestAudio() { try { if (alertAudio) { alertAudio.loop = false; alertAudio.pause(); } audioSessionType("auto"); } catch { } }
 function buzz() {
   const nav = navigator as Any;
   if (nav.vibrate && nav.vibrate([220, 110, 220, 110, 420])) return;
-  haptic(); setTimeout(haptic, 160); setTimeout(haptic, 320);        // iPhone: haptic taps while the app is open
+  haptic(); setTimeout(haptic, 160); setTimeout(haptic, 320);
 }
 function beep() {
-  try { const a = alertAudio || (alertAudio = new Audio()); a.loop = false; a.src = beepWav(); a.currentTime = 0; a.onended = () => stopRestAudio(); const pr = a.play(); if (pr && pr.catch) pr.catch(() => { }); } catch { }
-}
-async function notifyRestOver(s: Any) {
   try {
-    if (typeof Notification === "undefined" || Notification.permission !== "granted" || !("serviceWorker" in navigator)) return;
-    const reg = await navigator.serviceWorker.getRegistration(); if (!reg) return;
-    const nu = nextUp(s);
-    await reg.showNotification(t("restOverTitle"), { body: nu ? `${t("nextUp")}: ${nu}` : t("restOverBody"), tag: "rest-over", renotify: true, silent: false, icon: "icons/icon-192.png", vibrate: [220, 110, 220, 110, 420] } as Any);
+    if (!actx) return; const c = actx; if (c.state !== "running") c.resume();
+    const t0 = c.currentTime + 0.02;
+    for (let i = 0; i < 3; i++) {
+      const o = c.createOscillator(), g = c.createGain(), at = t0 + i * 0.28;
+      o.type = "sine"; o.frequency.value = 880; o.connect(g); g.connect(c.destination);
+      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.5, at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.2);
+      o.start(at); o.stop(at + 0.22);
+    }
   } catch { /* best effort */ }
+}
+const NTFY = "https://ntfy.sh";
+const ntfyTopic = () => A.settings.ntfyTopic as string | undefined;
+function newTopic() { const a = new Uint8Array(16); crypto.getRandomValues(a); return "jimlogs-" + Array.from(a, x => (x % 36).toString(36)).join(""); }
+function ntfyPost(path: string, params: Record<string, string>, body: string) {
+  const u = new URL(NTFY + path); for (const k in params) u.searchParams.set(k, params[k]);
+  return fetch(u.toString(), { method: "POST", mode: "no-cors", body }).catch(() => { });     // fire and forget; a simple request needs no CORS handshake
+}
+const ntfyCancel = (topic: string) => fetch(`${NTFY}/${topic}/rest/delete`, { mode: "no-cors" }).catch(() => { });
+let pushSig = "", pushEndsAt = 0;
+/** Keeps ONE scheduled ntfy message in step with the running rest timer (start, +30 / −30, edit, skip). */
+function syncRestPush(s: Any) {
+  const topic = ntfyTopic();
+  const on = !!(A.settings.restPush && topic);
+  const sig = on && s && s.rest && !s.rest.buzzed ? String(s.rest.endsAt) : "";
+  if (sig === pushSig) return;
+  const had = pushSig; pushSig = sig;
+  if (!sig) { if (had && topic && pushEndsAt - now() > 3000) ntfyCancel(topic); return; }      // cancel only if it has not been delivered yet
+  pushEndsAt = s.rest.endsAt;
+  const secs = Math.round((s.rest.endsAt - now()) / 1000);
+  if (secs < 12) { if (had && topic) ntfyCancel(topic); return; }                                // ntfy's minimum delay is 10 s
+  const nu = nextUp(s);
+  ntfyPost(`/${topic}/rest`, { delay: `${Math.max(10, secs - 4)}s`, title: t("restOverTitle"), priority: "4", tags: "muscle" }, nu ? `${t("nextUp")}: ${nu}` : t("restOverBody"));
+}
+async function ntfyTest() {
+  const topic = ntfyTopic(); if (!topic) return;
+  await ntfyPost(`/${topic}`, { title: t("pushTestTitle"), priority: "4", tags: "white_check_mark" }, t("pushTestBody"));
+  toast(t("pushTestSent"));
 }
 function restAlert(s: Any) {
   if (!s.rest || now() - s.rest.endsAt > 10000) return;               // opened the app long after the rest ended: stay quiet
   if (A.settings.restVibrate !== false) buzz();
   if (A.settings.restSound) beep();
-  if (A.settings.restLock) { notifyRestOver(s); if (!A.settings.restSound) setTimeout(stopRestAudio, 800); }
-  else if (!A.settings.restSound) stopRestAudio();
-}
-async function setRestLock(on: boolean) {
-  if (!on) { A.settings.restLock = false; stopRestAudio(); return; }
-  if (typeof Notification === "undefined") { toast(t("restLockNoSupport")); return; }
-  if (isIOS() && !standalone()) { toast(t("restLockInstall")); return; }
-  let perm = Notification.permission;
-  if (perm === "default") { try { perm = await Notification.requestPermission(); } catch { } }
-  if (perm !== "granted") { toast(t("restLockDenied")); return; }
-  A.settings.restLock = true;
 }
 function toast(msg: string, undo?: () => void) {
   A.toast = { msg, undo }; clearTimeout(toastTimer);
@@ -370,7 +375,7 @@ function planMenu(s: Any) {
 async function requestWake() {
   try { if ("wakeLock" in navigator && activeSession() && route().v === "workout") wakeLock = await (navigator as Any).wakeLock.request("screen"); } catch { /* unsupported */ }
 }
-function releaseWake() { try { wakeLock && wakeLock.release(); } catch { } wakeLock = null; stopRestAudio(); }
+function releaseWake() { try { wakeLock && wakeLock.release(); } catch { } wakeLock = null; }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { render(); requestWake(); } });
 
 /* ---------------- icons ---------------- */
@@ -1107,7 +1112,7 @@ function diagText() {
   const ua = navigator.userAgent;
   const dev = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : "Desktop";
   const os = (ua.match(/OS (\d+[_.]\d+)/) || ua.match(/Android (\d+(\.\d+)?)/) || [])[1]?.replace("_", ".") || "";
-  return `Logbook ${VERSION}${isBeta ? " beta" : ""} · ${dev}${os ? " " + os : ""} · ${standalone() ? "app" : "browser"} · ${L()} · ${window.innerWidth}×${window.innerHeight}`;
+  return `JimLogs ${VERSION}${isBeta ? " beta" : ""} · ${dev}${os ? " " + os : ""} · ${standalone() ? "app" : "browser"} · ${L()} · ${window.innerWidth}×${window.innerHeight}`;
 }
 function vFeedback() {
   const f = A.fb || (A.fb = { kind: "idea", text: "", diag: true });
@@ -1122,7 +1127,7 @@ function vFeedback() {
 async function sendFeedback() {
   const f = A.fb; const text = (f.text || "").trim();
   if (!text) { toast(t("fbEmpty")); render(); return; }
-  const msg = `[Logbook ${t("fb_" + f.kind)}]\n${text}${f.diag ? "\n\n— " + diagText() : ""}`;
+  const msg = `[JimLogs ${t("fb_" + f.kind)}]\n${text}${f.diag ? "\n\n— " + diagText() : ""}`;
   const nav: Any = navigator;
   try { if (nav.share) { await nav.share({ text: msg }); A.fb = null; toast(t("fbThanks")); back(); return; } } catch (e: Any) { if (e && e.name === "AbortError") return; }
   try { await navigator.clipboard.writeText(msg); toast(t("fbCopied")); } catch { toast(t("copyFailed")); }
@@ -1237,17 +1242,20 @@ function vMore() {
     <h2>${t("restAlertT")}</h2>
     <label class="toggle"><input type="checkbox" ${A.settings.restVibrate !== false ? "checked" : ""} data-a="restVibrate"> ${t("restVibrate")}</label>
     <label class="toggle"><input type="checkbox" ${A.settings.restSound ? "checked" : ""} data-a="restSound"> ${t("restSound")}</label>
-    <label class="toggle"><input type="checkbox" ${A.settings.restLock ? "checked" : ""} data-a="restLock"> ${t("restLock")}</label>
+    <label class="toggle"><input type="checkbox" ${A.settings.restPush ? "checked" : ""} data-a="restPush"> ${t("restPush")}</label>
+    ${A.settings.restPush ? `<div class="card mt8"><div class="sub small">${t("pushTopic")}</div><div class="mono small wrapany">${esc(ntfyTopic() || "")}</div>
+      <div class="row g8 mt8 wrap"><button class="btn ghost small" data-a="pushSetup">${t("pushHow")}</button><button class="btn ghost small" data-a="pushTest">${t("pushTest")}</button><button class="btn ghost small" data-a="pushCopy">${t("pushCopy")}</button></div></div>` : ""}
     <p class="faint small">${t("restAlertHelp")}</p>
     <h2>${t("theme")}</h2><div class="seg">${["system", "light", "dark"].map(k => `<button class="${(A.settings.theme || "system") === k ? "on" : ""}" data-a="theme" data-v="${k}">${t(k)}</button>`).join("")}</div>
     <h2>${t("data")}</h2>
+    <button class="btn ghost block" data-a="exportAll">${t("exportAll")}</button><p class="faint small">${t("exportAllHelp")}</p>
     <button class="btn ghost block" data-a="exportCsv">${t("exportCsv")}</button>
     <label class="btn ghost block mt8 filebtn">${t("importJson")}<input type="file" accept=".json,.csv,.tsv,.txt,.md,.xlsx,image/*,text/*,application/json" data-in="impFile" hidden></label>
     ${disc.length ? `<h2>${t("discarded")}</h2><div class="card">${disc.map((s: Any) => `<div class="li"><span class="flex1">${esc(nm(s.dayName))}<span class="sub block small">${sessionDate(s)} · ${sessionStats(s).sets} ${t("sets").toLowerCase()}</span></span><button class="btn ghost small" data-a="restoreSession" data-id="${s.id}">${t("restore")}</button><button class="iconbtn danger" data-a="purgeSession" data-id="${s.id}" aria-label="${t("deleteForever")}">${I.x}</button></div>`).join("")}</div>` : ""}
     ${delP.length ? `<h2>${t("deletedPrograms")}</h2><div class="card">${delP.map((p: Any) => `<div class="li"><span class="flex1">${esc(p.name)}</span><button class="btn ghost small" data-a="progRestore" data-id="${p.id}">${t("restore")}</button><button class="iconbtn danger" data-a="progPurge" data-id="${p.id}" aria-label="${t("deleteForever")}">${I.x}</button></div>`).join("")}</div>` : ""}
     ${delEx.length ? `<h2>${t("deletedEx")}</h2><div class="card">${delEx.map((e: Any) => `<div class="li"><span>${esc(nm(e.name))}</span><button class="btn ghost small" data-a="restoreEx" data-id="${e.id}">${t("restore")}</button></div>`).join("")}</div>` : ""}
     <h2>${t("storage")}</h2><div class="card"><div class="sub">${A.persisted ? t("persisted") : t("notPersisted")}</div><div class="sub mt8">${t("installHint")}</div></div>
-    <p class="faint small c mt16">Logbook ${VERSION}${isBeta ? " · beta" : ""}</p></div>`;
+    <p class="faint small c mt16">JimLogs ${VERSION}${isBeta ? " · beta" : ""}</p></div>`;
 }
 
 /* ---------------- Sheets ---------------- */
@@ -1269,6 +1277,14 @@ function vSheet() {
   } else if (sh.kind === "confirm") {
     inner = `<h3>${esc(sh.title)}</h3><p class="sub">${esc(sh.body)}</p><div class="row g8"><button class="btn ghost flex1" data-a="closeSheet">${t("cancel")}</button>
       <button class="btn ${sh.danger ? "ghost danger" : "primary"} flex1" data-a="confirmOk">${esc(sh.okLabel)}</button></div>`;
+  } else if (sh.kind === "ntfy") {
+    inner = `<h3>${t("pushSetupT")}</h3><ol class="steps sub">
+      <li>${t("pushStep1")} <a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener" class="accent">ntfy ↗</a></li>
+      <li>${t("pushStep2")}<div class="mono small wrapany mt4">${esc(ntfyTopic() || "")}</div></li>
+      <li>${t("pushStep3")}</li></ol>
+      <div class="row g8 mt12 wrap"><button class="btn ghost flex1" data-a="pushCopy">${t("pushCopy")}</button><button class="btn primary flex1" data-a="pushTest">${t("pushTest")}</button></div>
+      <p class="faint small mt8">${t("pushPrivacy")}</p>
+      <button class="btn ghost block mt8" data-a="pushNew">${t("pushNew")}</button><button class="btn ghost block mt8" data-a="closeSheet">${t("done")}</button>`;
   } else if (sh.kind === "wnotes") {
     const s = activeSession(), e = s.exercises[s.idx];
     inner = `<h3>${t("wnTitle")}</h3>
@@ -1322,10 +1338,11 @@ const stamp = () => new Date().toISOString().slice(0, 10);
 async function exportJson() {
   const data = { app: "logbook", schema: 1, exportedAt: new Date().toISOString(), version: VERSION,
     exercises: await db.all("exercises"), programs: await db.all("programs"), sessions: await db.all("sessions"), settings: A.settings };
-  const ok = await shareFile(`logbook-backup-${stamp()}.json`, "application/json", JSON.stringify(data, null, 1));
+  const ok = await shareFile(`jimlogs-backup-${stamp()}.json`, "application/json", JSON.stringify(data, null, 1));
   if (ok) { A.settings.lastBackupAt = now(); await saveSettings(); toast(t("saved")); render(); }
 }
-async function exportCsv() { await shareFile(`logbook-sets-${stamp()}.csv`, "text/csv", setsCsv(A.sessions, A.lib)); }
+async function exportAll() { await shareFile(`jimlogs-everything-${stamp()}.txt`, "text/plain", fullText(A.sessions, A.programs, A.lib, L())); }
+async function exportCsv() { await shareFile(`jimlogs-sets-${stamp()}.csv`, "text/csv", setsCsv(A.sessions, A.lib)); }
 async function importFile(file: File) {
   try {
     const data = JSON.parse(await file.text());
@@ -1363,7 +1380,11 @@ app.addEventListener("click", async ev => {
       case "accent": A.settings.accent = v; await saveSettings(); break;
       case "restVibrate": A.settings.restVibrate = !(A.settings.restVibrate !== false); await saveSettings(); if (A.settings.restVibrate) buzz(); break;
       case "restSound": A.settings.restSound = !A.settings.restSound; await saveSettings(); if (A.settings.restSound) { armRestAudio(); setTimeout(beep, 300); } break;
-      case "restLock": await setRestLock(!A.settings.restLock); await saveSettings(); break;
+      case "restPush": { const on = !A.settings.restPush; A.settings.restPush = on; if (on && !A.settings.ntfyTopic) A.settings.ntfyTopic = newTopic(); await saveSettings(); if (on) A.sheet = { kind: "ntfy" }; break; }
+      case "pushSetup": A.sheet = { kind: "ntfy" }; break;
+      case "pushTest": await ntfyTest(); return;
+      case "pushCopy": { try { await navigator.clipboard.writeText(ntfyTopic() || ""); toast(t("pushCopied")); } catch { toast(t("copyFailed")); } break; }
+      case "pushNew": confirmSheet(t("pushNew"), t("pushNewQ"), t("pushNew"), false, async () => { A.settings.ntfyTopic = newTopic(); await saveSettings(); A.sheet = { kind: "ntfy" }; }); return;
       case "cbSafe": A.settings.cbSafe = !A.settings.cbSafe; await saveSettings(); break;
       case "closeSheet": A.sheet = null; break;
       // sheets
@@ -1389,10 +1410,11 @@ app.addEventListener("click", async ev => {
       case "openSummary": go("summary", { id: d.id }); return;
       case "exportJson": await exportJson(); return;
       case "exportCsv": await exportCsv(); return;
+      case "exportAll": await exportAll(); return;
       // workout
       case "goto": { const i = +v; if (s && i >= 0 && i < s.exercises.length) { s.idx = i; await saveSession(s); render(); const b = document.getElementById("wkbody"); if (b) b.scrollTop = 0; centerStrip(); } return; }
       case "pause": if (s.pausedAt) { s.pausedMs += now() - s.pausedAt; s.pausedAt = null; } else s.pausedAt = now(); await saveSession(s); break;
-      case "check": armRestAudio(); await toggleSet(s, +v); if (!s.rest) stopRestAudio(); render(); centerStrip(); return;
+      case "check": armRestAudio(); await toggleSet(s, +v); render(); centerStrip(); return;
       case "wNum": { const e = s.exercises[s.idx], x = e.sets[+v], f = d.f!, ex = exById(e.exId);
         numSheet(numTitle(f, ex), x[f], numOpts(f, ex), async n => {
           const old = x[f]; x[f] = n; x.edited = { ...(x.edited || {}), [f]: true };
@@ -1437,7 +1459,7 @@ app.addEventListener("click", async ev => {
           } };
         break; }
       case "restOnce": case "restAlways": { const n = Math.max(0, Math.round(parseFloat(sh.val) || 0)); A.sheet = null; await sh.apply(n, a === "restAlways"); break; }
-      case "restSkip": s.rest = null; stopRestAudio(); await saveSession(s); break;
+      case "restSkip": s.rest = null; await saveSession(s); break;
       case "askFinish": askFinish(s); return;
       case "askDiscard": askDiscard(s); return;
       // suggestions
@@ -1843,7 +1865,7 @@ app.addEventListener("touchend", async e => {
 
 /* ticking: clock + rest timer, without re-rendering the whole screen */
 setInterval(() => {
-  const s = activeSession(); if (!s) return;
+  const s = activeSession(); syncRestPush(s); if (!s) return;
   if (s.rest && !s.rest.buzzed && s.rest.endsAt <= now()) { s.rest.buzzed = true; restAlert(s); saveSession(s); }
   if (A.sheet || drag) return;
   app.querySelectorAll("[data-clock]").forEach(n => n.textContent = (route().v === "workout" && s.pausedAt ? t("paused") + " · " : "") + clock(elapsed(s)));

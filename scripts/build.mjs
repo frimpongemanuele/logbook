@@ -1,5 +1,5 @@
 // Build one channel of the app: node scripts/build.mjs beta | live
-//   beta → ./beta   (served at /logbook/beta/, own database "logbook-beta", name "Logbook β")
+//   beta → ./beta   (served at /logbook/beta/, own database "logbook-beta", name "JimLogs β")
 //   live → ./public (served at /logbook/, database "logbook")
 // Promote the tested beta to everyone with: node scripts/build.mjs live
 import { execSync } from "child_process";
@@ -9,7 +9,7 @@ if (!["beta", "live"].includes(channel)) { console.error("usage: node scripts/bu
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const out = path.join(root, channel === "live" ? "public" : "beta");
 const version = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
-const NAME = channel === "live" ? "Logbook" : "Logbook β";
+const NAME = channel === "live" ? "JimLogs" : "JimLogs β";
 const tsc = fs.existsSync(path.join(root, "node_modules/.bin/tsc")) ? "node_modules/.bin/tsc" : "tsc";
 fs.rmSync(path.join(root, ".build"), { recursive: true, force: true });
 execSync(`${tsc} -p .`, { cwd: root, stdio: "inherit" });

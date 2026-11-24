@@ -69,7 +69,7 @@ test("notebook log: warm-up, RIR, superset, optional, separators", () => {
   assert.deepEqual(s[1].exercises[0].sets.map(x => x.reps), [100, 120]);
   matchAll(null, s, lib, new Set()); assert.equal(nm(s[1].exercises[0].exId), "Jump Rope");
 });
-test("Logbook CSV export round-trips into sessions", () => {
+test("JimLogs CSV export round-trips into sessions", () => {
   const csv = "date,session_id,day,exercise,exercise_it,set,type,load_kg,reps,rir,rpe,done,target_reps_min,target_reps_max,target_rir,date_unknown,minutes\n2026-11-10T08:00:00.000Z,s1,Push,Bench Press,Panca piana,1,working,80,8,2,8,1,8,10,2,0,\n2026-11-10T08:00:00.000Z,s1,Push,Bench Press,Panca piana,2,working,85,6,1,9,1,8,10,1,0,\n2026-11-10T08:00:00.000Z,s1,Push,Treadmill,Tapis roulant,1,working,0,0,,,1,,,,0,15";
   const r = parseAny(csv); assert.equal(r.kind, "log");
   assert.equal(r.sessions[0].date, "2026-11-10");

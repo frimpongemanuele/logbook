@@ -1,6 +1,6 @@
 {
-  "name": "Logbook",
-  "short_name": "Logbook",
+  "name": "JimLogs",
+  "short_name": "JimLogs",
   "description": "Personal workout log and progression tracker",
   "id": "./",
   "start_url": "./",

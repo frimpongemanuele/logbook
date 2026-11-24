@@ -278,3 +278,6 @@ html[data-cb="1"][data-theme="light"]{--done:#0072b2;--done-soft:rgba(0,114,178,
 .sheet.still{animation:none}
 .bigval{height:58px;line-height:58px;white-space:nowrap;overflow:hidden;margin:6px 0 10px}
 .toggle input{flex:none}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.wrapany{word-break:break-all}
+/* current exercise in the strip: a touch larger and bolder */
+.strip button.on{font-size:14px;font-weight:700}

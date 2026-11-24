@@ -352,7 +352,7 @@ export function parseLog(text) {
     flush();
     return sessions.map((s, i) => ({ ...s, name: s.name || `Workout ${i + 1}` }));
 }
-/** CSV with a date column → sessions (Logbook's own CSV export, or similar). */
+/** CSV with a date column → sessions (JimLogs's own CSV export, or similar). */
 export function parseLogRows(rows) {
     const hi = rows.findIndex(r => { const h = headerMap(r); return h && h.date != null; });
     if (hi < 0)

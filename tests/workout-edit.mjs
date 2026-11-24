@@ -12,7 +12,8 @@ await ctx.grantPermissions(["notifications"], { origin: "http://localhost:8766" 
 const page = await ctx.newPage(); const errors = [];
 await page.addInitScript(() => { try { Object.defineProperty(Notification, "permission", { get: () => "granted" }); Notification.requestPermission = async () => "granted"; } catch { }
   window.__calls = { vib: 0, notif: [] }; navigator.vibrate = (p) => { if (Array.isArray(p)) window.__calls.vib++; return true; };
-  ServiceWorkerRegistration.prototype.showNotification = function (t, o) { window.__calls.notif.push([t, o && o.body]); return Promise.resolve(); }; });
+  window.__calls.ntfy = []; const rf = window.fetch.bind(window);
+  window.fetch = (u, o) => { if (String(u).startsWith("https://ntfy.sh/")) { window.__calls.ntfy.push([String(u), (o && o.method) || "GET", o && o.body]); return Promise.resolve(new Response("")); } return rf(u, o); }; });
 const __unused = []; page.on("pageerror", e => errors.push(e.message));
 const dbAll = (store) => page.evaluate(async s => (await (await import("./js/db.js")).all(s)), store);
 try {
@@ -85,25 +86,32 @@ try {
   const top2 = await page.$eval(".sheet", e => e.getBoundingClientRect().top);
   ok("Keypad sheet does not replay its slide-in on key presses", anim1 === "none" && top0 === top1 && top1 === top2);
   await page.click('[data-a="kKey"][data-v="del"]'); await page.click('[data-a="kKey"][data-v="del"]'); await page.click('[data-a="kKey"][data-v="del"]'); await page.click('[data-a="kKey"][data-v="8"]'); await page.click('[data-a="kOk"]'); await page.waitForTimeout(150);
-  // --- rest-over alert: vibrate by default, notification when lock-screen mode is on
+  // --- rest-over alert: vibrate by default; lock-screen / Watch alert goes through ntfy (scheduled push), never through background audio
   await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.waitForSelector('.tabbar'); await page.click('.tabbar [data-a="tab"][data-v="more"]');
   ok("Vibrate is on by default", await page.$eval('[data-a="restVibrate"]', e => e.checked));
-  await page.click('[data-a="restLock"]'); await page.waitForTimeout(300);
-  ok("Lock-screen alert can be enabled and is saved", (await dbAll("meta")).some(m => m.key === "settings" && m.value?.restLock === true) || await page.$eval('[data-a="restLock"]', e => e.checked));
+  await page.click('[data-a="restPush"]'); await page.waitForSelector(".sheet");
+  const topic = (await dbAll("meta")).find(m => m.key === "settings")?.value?.ntfyTopic;
+  ok("Turning on the lock-screen alert makes a random private channel and opens setup", /^jimlogs-[a-z0-9]{16}$/.test(topic || "") && (await page.textContent(".sheet")).includes("ntfy"));
   await page.screenshot({ path: "tests/shots/34-rest-alert-settings.png" });
+  await page.click('.sheet [data-a="pushTest"]'); await page.waitForTimeout(200);
+  ok("Send test posts to the user's channel", (await page.evaluate(() => window.__calls.ntfy)).some(c => c[0].startsWith("https://ntfy.sh/" + topic) && c[1] === "POST"));
+  await page.click('.sheet [data-a="closeSheet"]'); await page.waitForTimeout(200);
   await page.click('.minibar'); await page.waitForSelector(".ex-name");
-  await page.click('.set:not(.done) [data-a="check"]'); await page.waitForSelector("[data-restbar]");
+  await page.evaluate(() => { window.__calls.ntfy = []; });
+  await page.click('.set:not(.done) [data-a="check"]'); await page.waitForSelector("[data-restbar]"); await page.waitForTimeout(700);
+  const sched = await page.evaluate(() => window.__calls.ntfy);
+  ok("Finishing a set schedules ONE delayed push (replaceable id 'rest')", sched.length === 1 && sched[0][0].includes(`/${topic}/rest?`) && /delay=\d+s/.test(sched[0][0]) && sched[0][1] === "POST");
   await page.click('[data-a="restEdit"]'); await page.waitForSelector(".keys"); await page.click('[data-a="kKey"][data-v="1"]'); await page.click('[data-a="restOnce"]');
   await page.waitForTimeout(1800);
+  const afterSkip = await page.evaluate(() => window.__calls.ntfy);
+  ok("Shortening the rest cancels the scheduled push", afterSkip.length === 2 && afterSkip[1][0].includes(`/${topic}/rest/delete`));
   const calls = await page.evaluate(() => window.__calls);
-  ok("Rest over → vibration", calls.vib > 0);
-  ok("Rest over → notification sent (reaches the watch when locked)", calls.notif.length === 1 && /Rest over/.test(calls.notif[0][0]));
-  ok("A silent keep-alive sound ran during the rest", await page.evaluate(() => true));
-  await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.click('.tabbar [data-a="tab"][data-v="more"]'); await page.click('[data-a="restVibrate"]'); await page.click('[data-a="restLock"]'); await page.waitForTimeout(200);
-  await page.click('.minibar'); await page.waitForSelector(".ex-name"); await page.evaluate(() => { window.__calls = { vib: 0, notif: [] }; });
+  ok("Rest over → in-app vibration", calls.vib > 0);
+  await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.click('.tabbar [data-a="tab"][data-v="more"]'); await page.click('[data-a="restVibrate"]'); await page.click('[data-a="restPush"]'); await page.waitForTimeout(200);
+  await page.click('.minibar'); await page.waitForSelector(".ex-name"); await page.evaluate(() => { window.__calls.vib = 0; window.__calls.ntfy = []; });
   await page.click('.set:not(.done) [data-a="check"]'); await page.click('[data-a="restEdit"]'); await page.waitForSelector(".keys"); await page.click('[data-a="kKey"][data-v="1"]'); await page.click('[data-a="restOnce"]'); await page.waitForTimeout(1800);
   const off = await page.evaluate(() => window.__calls);
-  ok("With the alerts switched off nothing buzzes or notifies", off.vib === 0 && off.notif.length === 0);
+  ok("With the alerts switched off nothing buzzes or is pushed", off.vib === 0 && off.ntfy.length === 0);
   // --- treadmill: speed and incline, added mid-workout, removable from this workout only
   const plansBefore = JSON.stringify((await dbAll("programs"))[0]);
   await page.click('[data-a="addToWorkout"]'); await page.waitForSelector(".search");

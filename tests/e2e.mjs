@@ -20,7 +20,7 @@ try {
   ok("Fresh install shows welcome (no personal data shipped)", true);
   // ---- guided tutorial on first launch
   await page.waitForSelector(".tour-card");
-  ok("Tutorial opens on first launch", (await page.textContent(".tour-card h3")).includes("Welcome to Logbook"));
+  ok("Tutorial opens on first launch", (await page.textContent(".tour-card h3")).includes("Welcome to JimLogs"));
   await shot("00-tour-welcome");
   const titles = [];
   for (let i = 0; i < 12 && !(await page.$('.tour [data-a="tourDo"]')); i++) {
@@ -328,7 +328,7 @@ try {
   await page.fill('[data-in="fbText"]', "Rest timer froze after locking the phone"); await shot("20-feedback");
   await page.click('[data-a="fbSend"]'); await page.waitForTimeout(300);
   const fb = await page.evaluate(() => navigator.clipboard.readText());
-  ok("Feedback message has type, text and diagnostics", fb.startsWith("[Logbook Bug]") && fb.includes("Rest timer froze") && (BETA ? /Logbook \d+\.\d+\.\d+ beta ·/ : /Logbook \d+\.\d+\.\d+ ·/).test(fb));
+  ok("Feedback message has type, text and diagnostics", fb.startsWith("[JimLogs Bug]") && fb.includes("Rest timer froze") && (BETA ? /JimLogs \d+\.\d+\.\d+ beta ·/ : /JimLogs \d+\.\d+\.\d+ ·/).test(fb));
   await page.click('[data-a="tab"][data-v="programs"]'); await page.locator('[data-a="openProgram"]').first().click();
   const shareName = await page.inputValue("#pname");
   await page.click('[data-a="programMenu"]'); await page.click('.sheet button:has-text("Share program")');
