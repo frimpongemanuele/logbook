@@ -12,8 +12,10 @@ await ctx.grantPermissions(["notifications"], { origin: "http://localhost:8766" 
 const page = await ctx.newPage(); const errors = [];
 await page.addInitScript(() => { try { Object.defineProperty(Notification, "permission", { get: () => "granted" }); Notification.requestPermission = async () => "granted"; } catch { }
   window.__calls = { vib: 0, notif: [] }; navigator.vibrate = (p) => { if (Array.isArray(p)) window.__calls.vib++; return true; };
-  window.__calls.ntfy = []; const rf = window.fetch.bind(window);
-  window.fetch = (u, o) => { if (String(u).startsWith("https://ntfy.sh/")) { window.__calls.ntfy.push([String(u), (o && o.method) || "GET", o && o.body]); return Promise.resolve(new Response("")); } return rf(u, o); }; });
+  window.__calls.ntfy = []; window.__calls.wp = [];
+  PushManager.prototype.subscribe = async () => ({ toJSON: () => ({ endpoint: "https://web.push.apple.com/test", keys: { p256dh: "BAAA", auth: "AAAA" } }), unsubscribe: async () => true });
+  const rf = window.fetch.bind(window);
+  window.fetch = (u, o) => { if (String(u).startsWith("https://jimlogs-push.test.workers.dev")) { window.__calls.wp.push([String(u), o && o.body]); return Promise.resolve(new Response(String(u).endsWith("/vapid") ? btoa(String.fromCharCode(4, ...new Array(64).fill(1))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") : '{"ok":true}', { status: 200 })); } if (String(u).startsWith("https://ntfy.sh/")) { window.__calls.ntfy.push([String(u), (o && o.method) || "GET", o && o.body]); return Promise.resolve(new Response("")); } return rf(u, o); }; });
 const __unused = []; page.on("pageerror", e => errors.push(e.message));
 const dbAll = (store) => page.evaluate(async s => (await (await import("./js/db.js")).all(s)), store);
 try {
@@ -108,6 +110,27 @@ try {
   const calls = await page.evaluate(() => window.__calls);
   ok("Rest over → in-app vibration", calls.vib > 0);
   await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.click('.tabbar [data-a="tab"][data-v="more"]'); await page.click('[data-a="restVibrate"]'); await page.click('[data-a="restPush"]'); await page.waitForTimeout(200);
+  // --- JimLogs push server (Cloudflare Worker): real Web Push
+  await page.click('.wk-top [data-a="tab"][data-v="today"]').catch(() => {});
+  await page.click('.tabbar [data-a="tab"][data-v="more"]'); await page.click('[data-a="restWPush"]'); await page.waitForSelector("#wpUrl");
+  await page.fill("#wpUrl", "https://jimlogs-push.test.workers.dev/"); await page.click('.sheet [data-a="wpEnable"]'); await page.waitForTimeout(400);
+  const wset = (await dbAll("meta")).find(m => m.key === "settings")?.value || {};
+  ok("Enabling the server alert stores the subscription, a long random key and the address", wset.restWPush === true && wset.pushSub?.endpoint?.includes("web.push.apple.com") && /^[0-9a-f]{64}$/.test(wset.pushKey || "") && wset.pushUrl === "https://jimlogs-push.test.workers.dev");
+  ok("It asked the server for its public key first", (await page.evaluate(() => window.__calls.wp)).some(c => c[0].endsWith("/vapid")));
+  await page.click('.sheet [data-a="wpTest"]'); await page.waitForTimeout(200);
+  const wt = (await page.evaluate(() => window.__calls.wp)).find(c => c[0].endsWith("/test"));
+  ok("Send test calls /test with the key and subscription", wt && JSON.parse(wt[1]).key === wset.pushKey && JSON.parse(wt[1]).sub.endpoint.includes("apple"));
+  await page.screenshot({ path: "tests/shots/35-push-server-setup.png" });
+  await page.click('.sheet [data-a="closeSheet"]'); await page.waitForTimeout(200);
+  await page.click('.minibar'); await page.waitForSelector(".ex-name"); await page.evaluate(() => { window.__calls.wp = []; window.__calls.vib = 0; window.__calls.ntfy = []; });
+  await page.locator('.set.done [data-a="check"]').first().click(); await page.waitForTimeout(300); await page.evaluate(() => { window.__calls.wp = []; });
+  await page.click('.set:not(.done) [data-a="check"]'); await page.waitForSelector("[data-restbar]"); await page.waitForTimeout(700);
+  const ws = (await page.evaluate(() => window.__calls.wp)).filter(c => c[0].endsWith("/schedule"));
+  const wb = ws[0] && JSON.parse(ws[0][1]);
+  ok("A finished set schedules exactly one server alert at the rest's end time", ws.length === 1 && wb.at > Date.now() + 20000 && /Rest over/.test(wb.title) && wb.key === wset.pushKey);
+  ok("…and nothing goes to ntfy while the server alert is on", (await page.evaluate(() => window.__calls.ntfy)).length === 0);
+  await page.click('.wk-top [data-a="tab"][data-v="today"]'); await page.click('.tabbar [data-a="tab"][data-v="more"]'); await page.click('[data-a="restWPush"]'); await page.waitForTimeout(700);
+  ok("Switching the server alert off cancels the pending one", (await page.evaluate(() => window.__calls.wp)).some(c => c[0].endsWith("/cancel")) && !(await page.$eval('[data-a="restWPush"]', e => e.checked)));
   await page.click('.minibar'); await page.waitForSelector(".ex-name"); await page.evaluate(() => { window.__calls.vib = 0; window.__calls.ntfy = []; });
   await page.click('.set:not(.done) [data-a="check"]'); await page.click('[data-a="restEdit"]'); await page.waitForSelector(".keys"); await page.click('[data-a="kKey"][data-v="1"]'); await page.click('[data-a="restOnce"]'); await page.waitForTimeout(1800);
   const off = await page.evaluate(() => window.__calls);

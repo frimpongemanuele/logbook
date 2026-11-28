@@ -24,3 +24,9 @@ self.addEventListener("notificationclick", e => {
     const mine = cs.find(c => c.url.startsWith(self.registration.scope)); return mine ? mine.focus() : self.clients.openWindow(self.registration.scope);
   }));
 });
+
+// Lock-screen "rest is over" alert, delivered by the JimLogs push server (iOS requires every push to show a notification).
+self.addEventListener("push", e => {
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch { }
+  e.waitUntil(self.registration.showNotification(d.title || "JimLogs", { body: d.body || "", tag: "rest-over", renotify: true, icon: "icons/icon-192.png" }));
+});

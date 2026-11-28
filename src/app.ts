@@ -116,19 +116,44 @@ function ntfyPost(path: string, params: Record<string, string>, body: string) {
 }
 const ntfyCancel = (topic: string) => fetch(`${NTFY}/${topic}/rest/delete`, { mode: "no-cors" }).catch(() => { });
 let pushSig = "", pushEndsAt = 0;
-/** Keeps ONE scheduled ntfy message in step with the running rest timer (start, +30 / −30, edit, skip). */
+/* JimLogs push server (Cloudflare Worker): real Web Push to this app, so the alert is a normal JimLogs notification (also on the Watch). */
+const wpUrl = () => ((A.settings.pushUrl as string) || "").replace(/\/+$/, "");
+const wpOn = () => !!(A.settings.restWPush && wpUrl() && A.settings.pushSub && A.settings.pushKey);
+const b64uBytes = (s: string) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "="; return Uint8Array.from(atob(s), c => c.charCodeAt(0)); };
+async function wpCall(path: string, body: Any): Promise<boolean> {
+  try { const r = await fetch(wpUrl() + path, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ key: A.settings.pushKey, sub: A.settings.pushSub, ...body }) }); return r.ok; } catch { return false; }
+}
+/** Must run inside a tap: asks for notification permission, subscribes this app to the server's push channel. */
+async function wpEnable(rawUrl: string): Promise<string | null> {
+  const url = rawUrl.trim().replace(/\/+$/, ""); if (!/^https:\/\/[^\s/]+\.[^\s/]+/.test(url)) return t("wpBadUrl");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return isIOS() && !standalone() ? t("wpInstall") : t("wpNoSupport");
+  const perm = await Notification.requestPermission(); if (perm !== "granted") return t("wpDenied");
+  let pub: string; try { const r = await fetch(url + "/vapid"); if (!r.ok) throw 0; pub = await r.text(); } catch { return t("wpUnreachable"); }
+  try {
+    const reg = await navigator.serviceWorker.ready; const old = await reg.pushManager.getSubscription(); if (old) await old.unsubscribe();
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(pub) });
+    A.settings.pushUrl = url; A.settings.pushSub = sub.toJSON(); A.settings.restWPush = true;
+    if (!A.settings.pushKey) { const r = new Uint8Array(32); crypto.getRandomValues(r); A.settings.pushKey = Array.from(r, x => x.toString(16).padStart(2, "0")).join(""); }
+    await saveSettings(); return null;
+  } catch { return t("wpFail"); }
+}
+/** Keeps ONE scheduled alert in step with the running rest timer (start, +30 / −30, edit, skip). Server push first, ntfy as fallback. */
 function syncRestPush(s: Any) {
-  const topic = ntfyTopic();
-  const on = !!(A.settings.restPush && topic);
-  const sig = on && s && s.rest && !s.rest.buzzed ? String(s.rest.endsAt) : "";
+  const wp = wpOn(), topic = ntfyTopic();
+  const nt = !wp && !!(A.settings.restPush && topic);
+  const sig = (wp || nt) && s && s.rest && !s.rest.buzzed ? (wp ? "w" : "n") + s.rest.endsAt : "";
   if (sig === pushSig) return;
   const had = pushSig; pushSig = sig;
-  if (!sig) { if (had && topic && pushEndsAt - now() > 3000) ntfyCancel(topic); return; }      // cancel only if it has not been delivered yet
+  const hadW = had.startsWith("w"), hadN = had.startsWith("n");
+  const cancelOld = () => { if (hadW) wpCall("/cancel", {}); else if (hadN && topic) ntfyCancel(topic); };
+  if (!sig) { if (had && pushEndsAt - now() > 3000) cancelOld(); return; }                         // cancel only if it has not been delivered yet
+  if (had && (hadW !== wp)) cancelOld();
   pushEndsAt = s.rest.endsAt;
   const secs = Math.round((s.rest.endsAt - now()) / 1000);
-  if (secs < 12) { if (had && topic) ntfyCancel(topic); return; }                                // ntfy's minimum delay is 10 s
-  const nu = nextUp(s);
-  ntfyPost(`/${topic}/rest`, { delay: `${Math.max(10, secs - 4)}s`, title: t("restOverTitle"), priority: "4", tags: "muscle" }, nu ? `${t("nextUp")}: ${nu}` : t("restOverBody"));
+  const nu = nextUp(s), msg = nu ? `${t("nextUp")}: ${nu}` : t("restOverBody");
+  if (wp) { if (secs < 1) { if (hadW) wpCall("/cancel", {}); return; } wpCall("/schedule", { at: s.rest.endsAt, title: t("restOverTitle"), body: msg }); return; }
+  if (secs < 12) { if (hadN && topic) ntfyCancel(topic); return; }                                  // ntfy's minimum delay is 10 s
+  ntfyPost(`/${topic}/rest`, { delay: `${Math.max(10, secs - 4)}s`, title: t("restOverTitle"), priority: "4", tags: "muscle" }, msg);
 }
 async function ntfyTest() {
   const topic = ntfyTopic(); if (!topic) return;
@@ -1242,6 +1267,8 @@ function vMore() {
     <h2>${t("restAlertT")}</h2>
     <label class="toggle"><input type="checkbox" ${A.settings.restVibrate !== false ? "checked" : ""} data-a="restVibrate"> ${t("restVibrate")}</label>
     <label class="toggle"><input type="checkbox" ${A.settings.restSound ? "checked" : ""} data-a="restSound"> ${t("restSound")}</label>
+    <label class="toggle"><input type="checkbox" ${wpOn() ? "checked" : ""} data-a="restWPush"> ${t("restWPush")}</label>
+    ${A.settings.pushUrl ? `<div class="row g8 mt8 wrap"><button class="btn ghost small" data-a="wpSetup">${t("pushHow")}</button><button class="btn ghost small" data-a="wpTest">${t("pushTest")}</button></div>` : ""}
     <label class="toggle"><input type="checkbox" ${A.settings.restPush ? "checked" : ""} data-a="restPush"> ${t("restPush")}</label>
     ${A.settings.restPush ? `<div class="card mt8"><div class="sub small">${t("pushTopic")}</div><div class="mono small wrapany">${esc(ntfyTopic() || "")}</div>
       <div class="row g8 mt8 wrap"><button class="btn ghost small" data-a="pushSetup">${t("pushHow")}</button><button class="btn ghost small" data-a="pushTest">${t("pushTest")}</button><button class="btn ghost small" data-a="pushCopy">${t("pushCopy")}</button></div></div>` : ""}
@@ -1277,6 +1304,12 @@ function vSheet() {
   } else if (sh.kind === "confirm") {
     inner = `<h3>${esc(sh.title)}</h3><p class="sub">${esc(sh.body)}</p><div class="row g8"><button class="btn ghost flex1" data-a="closeSheet">${t("cancel")}</button>
       <button class="btn ${sh.danger ? "ghost danger" : "primary"} flex1" data-a="confirmOk">${esc(sh.okLabel)}</button></div>`;
+  } else if (sh.kind === "wp") {
+    inner = `<h3>${t("wpSetupT")}</h3>${isIOS() && !standalone() ? `<p class="sub small" style="color:var(--warn,#ffb02e)">${t("wpInstall")}</p>` : ""}<ol class="steps sub">
+      <li>${t("wpStep1")}<input id="wpUrl" class="search mt4" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://jimlogs-push.….workers.dev" value="${esc(A.settings.pushUrl || "")}"></li>
+      <li>${t("wpStep2")}</li><li>${t("wpStep3")}</li></ol>
+      <div class="row g8 mt12 wrap"><button class="btn primary flex1" data-a="wpEnable">${t("wpEnable")}</button><button class="btn ghost flex1" data-a="wpTest">${t("pushTest")}</button></div>
+      <p class="faint small mt8">${t("wpPrivacy")}</p><button class="btn ghost block mt8" data-a="closeSheet">${t("done")}</button>`;
   } else if (sh.kind === "ntfy") {
     inner = `<h3>${t("pushSetupT")}</h3><ol class="steps sub">
       <li>${t("pushStep1")} <a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener" class="accent">ntfy ↗</a></li>
@@ -1382,6 +1415,10 @@ app.addEventListener("click", async ev => {
       case "restSound": A.settings.restSound = !A.settings.restSound; await saveSettings(); if (A.settings.restSound) { armRestAudio(); setTimeout(beep, 300); } break;
       case "restPush": { const on = !A.settings.restPush; A.settings.restPush = on; if (on && !A.settings.ntfyTopic) A.settings.ntfyTopic = newTopic(); await saveSettings(); if (on) A.sheet = { kind: "ntfy" }; break; }
       case "pushSetup": A.sheet = { kind: "ntfy" }; break;
+      case "restWPush": { if (A.settings.restWPush) { A.settings.restWPush = false; await saveSettings(); } else if (A.settings.pushSub && wpUrl()) { A.settings.restWPush = true; await saveSettings(); } else A.sheet = { kind: "wp" }; break; }
+      case "wpSetup": A.sheet = { kind: "wp" }; break;
+      case "wpEnable": { const v = (document.getElementById("wpUrl") as HTMLInputElement | null)?.value || ""; const err = await wpEnable(v); if (err) { toast(err); return; } toast(t("wpOn")); break; }
+      case "wpTest": { if (!A.settings.pushSub || !wpUrl()) { toast(t("wpNeedSetup")); return; } const ok = await wpCall("/test", { title: t("pushTestTitle"), body: t("pushTestBody") }); toast(ok ? t("pushTestSent") : t("wpUnreachable")); return; }
       case "pushTest": await ntfyTest(); return;
       case "pushCopy": { try { await navigator.clipboard.writeText(ntfyTopic() || ""); toast(t("pushCopied")); } catch { toast(t("copyFailed")); } break; }
       case "pushNew": confirmSheet(t("pushNew"), t("pushNewQ"), t("pushNew"), false, async () => { A.settings.ntfyTopic = newTopic(); await saveSettings(); A.sheet = { kind: "ntfy" }; }); return;
